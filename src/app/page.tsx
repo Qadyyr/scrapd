@@ -162,6 +162,10 @@ export default function Home() {
   React.useEffect(() => {
     loadHistory()
 
+    // Check if we're returning from a bookmarklet extraction
+    const urlParams = new URLSearchParams(window.location.search)
+    const fromBookmarklet = urlParams.get('from_bookmarklet')
+
     // Check for extracted data from the bookmarklet (via window.name or URL hash)
     if (typeof window !== 'undefined') {
       // Method 1: window.name with full HTML (new simple bookmarklet)
@@ -169,8 +173,12 @@ export default function Home() {
         try {
           const data = JSON.parse(window.name.slice('scribd_full:'.length))
           if (data.html) {
-            // Send full HTML to our extract-full endpoint
+            // Show processing indicator
             setExtracting(true)
+            toast.info('Processing extracted data...', { description: 'Extracting page images from the HTML' })
+            // Clean the URL
+            window.history.replaceState(null, '', window.location.pathname)
+            // Send full HTML to our extract-full endpoint
             fetch('/api/scribd/extract-full', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -182,7 +190,8 @@ export default function Home() {
                   setDocInfo(result)
                   setNeedsBrowserExtract(false)
                   setUrl(data.url || '')
-                  toast.success(`Extracted "${result.title}" with ${result.pageImages?.length || 0} pages!`)
+                  toast.success(`✅ Extracted "${result.title}" with ${result.pageImages?.length || 0} pages! Click Download below.`)
+                  window.scrollTo({ top: 0, behavior: 'smooth' })
                 } else {
                   toast.error(result.error || 'Extraction failed')
                   if (result.debug) {
@@ -250,9 +259,11 @@ export default function Home() {
   // Generate the bookmarklet href — DEAD SIMPLE version
   // Just grabs the entire page HTML and sends it to our server.
   // Server does ALL the parsing. No regex in the bookmarklet = no bugs.
+  // On success: stores result in window.name and REDIRECTS to the app.
+  // (Can't use window.open — popup blockers block it)
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full');x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success){alert('SUCCESS! Found '+r.pageImages.length+' pages. Return to the downloader tab.');window.open('${origin}','_blank')}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){window.name='scribd_full:'+d;location.href='${origin}/?from_bookmarklet=1'};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
+    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',false);x.setRequestHeader('Content-Type','application/json');x.send(d);try{var r=JSON.parse(x.responseText);if(r.success){window.name='scribd_full:'+d;location.href='${origin}/?from_bookmarklet=1'}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message+'\\n\\nResponse: '+x.responseText.substring(0,200))}}catch(e){alert('Error: '+e.message)}})())`
     return code
   }, [])
 
