@@ -449,15 +449,29 @@ async function fetchViaCloudflareWorker(url: string): Promise<string> {
 
 /**
  * Fetch a Scribd document page HTML. Tries multiple strategies:
- * 1. Cloudflare Worker proxy (if CF_WORKER_URL is set — works on Vercel)
- * 2. z-ai page_reader (works in z.ai sandbox)
- * 3. Direct fetch (works if not behind Cloudflare)
+ * 1. z-ai page_reader (PRIMARY — works perfectly, fetches real page with JSONP URLs)
+ * 2. Cloudflare Worker proxy (FALLBACK for Vercel — if CF_WORKER_URL is set)
+ * 3. Direct fetch (last resort — rarely works due to Cloudflare)
  * Returns the raw HTML content of the page.
  */
 async function fetchScribdHtml(url: string): Promise<string> {
   const errors: string[] = []
 
-  // Strategy 1: Cloudflare Worker proxy (PERMANENT FREE SOLUTION for Vercel)
+  // Strategy 1: z-ai page_reader (PRIMARY — works perfectly)
+  // This fetches the real Scribd page including all docManager.addPage() calls
+  // with JSONP URLs for every page image. It's free and reliable.
+  try {
+    const html = await fetchViaPageReader(url)
+    if (html && html.length > 5000) {
+      return html
+    }
+  } catch (err) {
+    errors.push(`z-ai: ${err instanceof Error ? err.message : 'failed'}`)
+  }
+
+  // Strategy 2: Cloudflare Worker proxy (FALLBACK for Vercel)
+  // Only used if z-ai isn't available (e.g., on Vercel where the internal
+  // API isn't reachable). Requires CF_WORKER_URL env var.
   if (process.env.CF_WORKER_URL) {
     try {
       const html = await fetchViaCloudflareWorker(url)
@@ -471,17 +485,7 @@ async function fetchScribdHtml(url: string): Promise<string> {
     }
   }
 
-  // Strategy 2: z-ai page_reader (works in z.ai sandbox)
-  try {
-    const html = await fetchViaPageReader(url)
-    if (html && html.length > 5000) {
-      return html
-    }
-  } catch (err) {
-    errors.push(`z-ai: ${err instanceof Error ? err.message : 'failed'}`)
-  }
-
-  // Strategy 3: Direct fetch (rarely works due to Cloudflare, but worth trying)
+  // Strategy 3: Direct fetch (last resort — rarely works due to Cloudflare)
   try {
     const res = await fetch(url, {
       headers: {
