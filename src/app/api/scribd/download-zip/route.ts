@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PDFDocument } from 'pdf-lib'
+import JSZip from 'jszip'
 import { fetchImageBuffer } from '@/lib/scribd'
 import { db } from '@/lib/db'
 
@@ -9,6 +9,15 @@ export const dynamic = 'force-dynamic'
 interface DownloadPage {
   index: number
   url: string
+}
+
+function sanitizeFilename(name: string): string {
+  return (
+    name
+      .replace(/[^a-z0-9-_ ]/gi, '')
+      .trim()
+      .slice(0, 60) || 'document'
+  )
 }
 
 function parsePageRange(range: string | undefined, totalPages: number): number[] {
@@ -60,12 +69,11 @@ export async function POST(req: NextRequest) {
 
     if (!pages || !Array.isArray(pages) || pages.length === 0) {
       return NextResponse.json(
-        { error: 'No pages provided for PDF generation.' },
+        { error: 'No pages provided for ZIP generation.' },
         { status: 400 }
       )
     }
 
-    // Determine which pages to include based on range
     const selectedIndices = parsePageRange(pageRange, pages.length)
     const selectedPages = selectedIndices
       .map((i) => pages[i])
@@ -78,11 +86,9 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const pdfDoc = await PDFDocument.create()
-    pdfDoc.setTitle(title || 'Scribd Document')
-    pdfDoc.setAuthor(author || 'Unknown')
-    pdfDoc.setCreator('Scribd Downloader')
-    pdfDoc.setProducer('Scribd Downloader')
+    const zip = new JSZip()
+    const folderName = sanitizeFilename(title || `document-${docId}`)
+    const folder = zip.folder(folderName) || zip
 
     let downloadedCount = 0
     let totalBytes = 0
@@ -92,31 +98,13 @@ export async function POST(req: NextRequest) {
         const imgBuffer = await fetchImageBuffer(page.url)
         totalBytes += imgBuffer.byteLength
 
-        let img
         const bytes = new Uint8Array(imgBuffer)
         const isPng =
           bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
-        const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8
+        const ext = isPng ? 'png' : 'jpg'
+        const pageNum = String(page.index + 1).padStart(3, '0')
 
-        if (isPng) {
-          img = await pdfDoc.embedPng(bytes)
-        } else if (isJpeg) {
-          img = await pdfDoc.embedJpg(bytes)
-        } else {
-          try {
-            img = await pdfDoc.embedJpg(bytes)
-          } catch {
-            continue
-          }
-        }
-
-        const pdfPage = pdfDoc.addPage([img.width, img.height])
-        pdfPage.drawImage(img, {
-          x: 0,
-          y: 0,
-          width: img.width,
-          height: img.height,
-        })
+        folder.file(`page-${pageNum}.${ext}`, imgBuffer)
         downloadedCount++
       } catch {
         // Skip failed pages
@@ -125,13 +113,17 @@ export async function POST(req: NextRequest) {
 
     if (downloadedCount === 0) {
       return NextResponse.json(
-        { error: 'Failed to download any page images. The document may be protected.' },
+        { error: 'Failed to download any page images.' },
         { status: 500 }
       )
     }
 
-    const pdfBytes = await pdfDoc.save()
-    const pdfSize = pdfBytes.byteLength
+    const zipBytes = await zip.generateAsync({
+      type: 'uint8array',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    })
+    const zipSize = zipBytes.byteLength
 
     // Save to download history
     try {
@@ -143,27 +135,27 @@ export async function POST(req: NextRequest) {
           author: author || null,
           pageCount: downloadedCount,
           thumbnail: thumbnail || null,
-          format: 'pdf',
+          format: 'zip',
           status: 'completed',
-          fileSize: pdfSize,
+          fileSize: zipSize,
         },
       })
     } catch {
-      // History save failure shouldn't block the download
+      // silent
     }
 
-    return new NextResponse(pdfBytes as any, {
+    return new NextResponse(zipBytes as any, {
       status: 200,
       headers: {
-        'Content-Type': 'application/pdf',
+        'Content-Type': 'application/zip',
         'Content-Disposition': `attachment; filename="${encodeURIComponent(
-          (title || 'document').slice(0, 60)
-        )}.pdf"`,
-        'Content-Length': String(pdfSize),
+          folderName
+        )}.zip"`,
+        'Content-Length': String(zipSize),
       },
     })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Failed to generate PDF.'
+    const msg = err instanceof Error ? err.message : 'Failed to generate ZIP.'
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

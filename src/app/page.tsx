@@ -8,7 +8,6 @@ import {
   FileText,
   Loader2,
   AlertCircle,
-  CheckCircle2,
   Clock,
   Trash2,
   Eye,
@@ -17,17 +16,25 @@ import {
   Zap,
   Globe,
   Sparkles,
-  ChevronDown,
   RefreshCw,
   Copy,
   Check,
   X,
   ImageIcon,
-  Loader,
+  Star,
+  Search,
+  FileArchive,
+  TrendingUp,
+  HardDrive,
+  Files,
+  Calendar,
+  Keyboard,
+  ListChecks,
+  Package,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Progress } from '@/components/ui/progress'
@@ -45,7 +52,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 import { ThemeToggle } from '@/components/theme-toggle'
+import { AnimatedCounter } from '@/components/animated-counter'
+import { useClipboardPaste, useKeyboardShortcuts } from '@/hooks/use-shortcuts'
 import { toast } from 'sonner'
 
 // ---------- Types ----------
@@ -80,18 +91,25 @@ interface HistoryItem {
   format: string
   status: string
   fileSize: number
+  favorite: boolean
   createdAt: string
 }
 
-// ---------- Constants ----------
-const SAMPLE_URLS = [
-  'https://www.scribd.com/document/123456789/sample-document',
-]
+interface Stats {
+  totalDownloads: number
+  totalPages: number
+  totalSize: number
+  pdfCount: number
+  zipCount: number
+  recentCount: number
+  todayCount: number
+}
 
+// ---------- Constants ----------
 const FAQS = [
   {
     q: 'How does the Scribd downloader work?',
-    a: 'Paste a Scribd document URL into the input box and click "Fetch Document". The tool retrieves the publicly accessible page images from the document and lets you preview them. You can then download all pages as a single PDF or save individual page images.',
+    a: 'Paste a Scribd document URL into the input box and click "Fetch Document". The tool retrieves the publicly accessible page images from the document and lets you preview them. You can then download all pages as a single PDF, a ZIP archive of images, or save individual page images.',
   },
   {
     q: 'Is it legal to download from Scribd?',
@@ -99,20 +117,35 @@ const FAQS = [
   },
   {
     q: 'What formats can I download?',
-    a: 'You can download the entire document as a PDF file, or download individual page images (JPEG/PNG). The PDF combines all pages in order for easy reading and sharing.',
+    a: 'You can download the entire document as a PDF file (combining all pages in order) or as a ZIP archive containing individual page images (JPEG/PNG). You can also download single page images directly from the preview grid.',
+  },
+  {
+    q: 'Can I download specific pages only?',
+    a: 'Yes! Use the "Page range" field in the document info card. Enter ranges like "1-5" or comma-separated values like "1,3,5-8" to download only the pages you need.',
   },
   {
     q: 'Why does a document fail to load?',
-    a: 'Some documents on Scribd are behind a paywall, require login, or use protected rendering that prevents image extraction. If a document cannot be fetched, you will see an error message with details. Try a different document that is publicly viewable.',
+    a: 'Some documents on Scribd are behind a paywall, require login, or use protected rendering that prevents image extraction. Scribd also uses Cloudflare anti-bot protection that may block server-side requests. If a document cannot be fetched, the app falls back to demo data so you can still explore the download flow.',
+  },
+  {
+    q: 'Are there keyboard shortcuts?',
+    a: 'Yes! Press Ctrl/Cmd+K to focus the URL input, Ctrl/Cmd+Enter to fetch the document, and Escape to close the preview modal. You can also paste a Scribd URL anywhere on the page and it will be auto-filled.',
   },
   {
     q: 'Is my download history saved?',
-    a: 'Yes, your download history is stored locally in the app\'s database so you can revisit and re-download documents. You can clear the history at any time using the "Clear History" button.',
+    a: 'Yes, your download history is stored locally so you can revisit, re-download, and favorite documents. You can search, filter favorites, export as JSON, or clear the history at any time.',
   },
   {
     q: 'Does this work on mobile?',
     a: 'Absolutely. The interface is fully responsive and works on phones, tablets, and desktops. You can paste URLs, preview pages, and download documents from any device.',
   },
+]
+
+const SHORTCUTS = [
+  { keys: 'Ctrl/⌘ + K', desc: 'Focus URL input' },
+  { keys: 'Ctrl/⌘ + Enter', desc: 'Fetch document' },
+  { keys: 'Ctrl/⌘ + D', desc: 'Load demo data' },
+  { keys: 'Esc', desc: 'Close preview modal' },
 ]
 
 // ---------- Main Component ----------
@@ -121,15 +154,23 @@ export default function Home() {
   const [loading, setLoading] = React.useState(false)
   const [docInfo, setDocInfo] = React.useState<DocInfo | null>(null)
   const [error, setError] = React.useState<string | null>(null)
-  const [downloading, setDownloading] = React.useState(false)
+  const [downloading, setDownloading] = React.useState<'pdf' | 'zip' | null>(null)
   const [downloadProgress, setDownloadProgress] = React.useState(0)
   const [history, setHistory] = React.useState<HistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = React.useState(true)
   const [previewPage, setPreviewPage] = React.useState<DocPage | null>(null)
+  const [stats, setStats] = React.useState<Stats | null>(null)
+  const [pageRange, setPageRange] = React.useState('')
+  const [selectedPages, setSelectedPages] = React.useState<Set<number>>(new Set())
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [favoritesOnly, setFavoritesOnly] = React.useState(false)
+  const [showShortcuts, setShowShortcuts] = React.useState(false)
+  const inputRef = React.useRef<HTMLInputElement>(null)
 
-  // Load history on mount
+  // Load history and stats on mount
   React.useEffect(() => {
     loadHistory()
+    loadStats()
   }, [])
 
   async function loadHistory() {
@@ -141,11 +182,55 @@ export default function Home() {
         setHistory(data.items || [])
       }
     } catch {
-      // silent fail
+      // silent
     } finally {
       setHistoryLoading(false)
     }
   }
+
+  async function loadStats() {
+    try {
+      const res = await fetch('/api/scribd/stats')
+      if (res.ok) {
+        const data = await res.json()
+        setStats(data)
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function refreshAll() {
+    await Promise.all([loadHistory(), loadStats()])
+  }
+
+  // Clipboard paste detection
+  useClipboardPaste((text) => {
+    setUrl(text)
+    toast.success('Scribd URL pasted automatically', {
+      description: 'Press Enter or click Fetch to continue.',
+    })
+    inputRef.current?.focus()
+  })
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    'mod+k': () => {
+      inputRef.current?.focus()
+      inputRef.current?.select()
+      toast.info('URL input focused')
+    },
+    'mod+enter': () => {
+      if (url.trim() && !loading) handleFetch()
+    },
+    'mod+d': () => {
+      if (!loading) handleDemo()
+    },
+    escape: () => {
+      if (previewPage) setPreviewPage(null)
+      else if (showShortcuts) setShowShortcuts(false)
+    },
+  })
 
   async function handleFetch(e?: React.FormEvent) {
     e?.preventDefault()
@@ -162,6 +247,8 @@ export default function Home() {
     setError(null)
     setDocInfo(null)
     setDownloadProgress(0)
+    setPageRange('')
+    setSelectedPages(new Set())
 
     try {
       const res = await fetch('/api/scribd/info', {
@@ -201,6 +288,8 @@ export default function Home() {
     setError(null)
     setDocInfo(null)
     setDownloadProgress(0)
+    setPageRange('')
+    setSelectedPages(new Set())
 
     try {
       const res = await fetch('/api/scribd/info', {
@@ -214,7 +303,7 @@ export default function Home() {
       }
       setDocInfo(data)
       toast.info('Demo mode loaded', {
-        description: 'Try downloading the sample PDF to see the full flow.',
+        description: 'Try downloading the sample PDF or ZIP to see the full flow.',
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load demo'
@@ -224,14 +313,15 @@ export default function Home() {
     }
   }
 
-  async function handleDownloadPdf() {
+  async function handleDownload(format: 'pdf' | 'zip') {
     if (!docInfo || docInfo.pages.length === 0) return
 
-    setDownloading(true)
+    setDownloading(format)
     setDownloadProgress(0)
 
     try {
-      const res = await fetch('/api/scribd/download', {
+      const endpoint = format === 'pdf' ? '/api/scribd/download' : '/api/scribd/download-zip'
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -241,6 +331,7 @@ export default function Home() {
           pages: docInfo.pages,
           sourceUrl: docInfo.sourceUrl,
           thumbnail: docInfo.thumbnail,
+          pageRange: pageRange.trim() || undefined,
         }),
       })
 
@@ -249,7 +340,6 @@ export default function Home() {
         throw new Error(errData.error || 'Download failed')
       }
 
-      // Track progress via content-length if available
       const contentLength = res.headers.get('content-length')
       if (contentLength && res.body) {
         const reader = res.body.getReader()
@@ -265,22 +355,24 @@ export default function Home() {
             setDownloadProgress(Math.min(100, Math.round((received / total) * 100)))
           }
         }
-        const blob = new Blob(chunks as BlobPart[], { type: 'application/pdf' })
-        triggerDownload(blob, `${sanitize(docInfo.title)}.pdf`)
+        const mimeType = format === 'pdf' ? 'application/pdf' : 'application/zip'
+        const blob = new Blob(chunks as BlobPart[], { type: mimeType })
+        triggerDownload(blob, `${sanitize(docInfo.title)}.${format}`)
       } else {
         const blob = await res.blob()
         setDownloadProgress(100)
-        triggerDownload(blob, `${sanitize(docInfo.title)}.pdf`)
+        triggerDownload(blob, `${sanitize(docInfo.title)}.${format}`)
       }
 
-      toast.success('PDF downloaded successfully!')
-      // Refresh history
-      loadHistory()
+      toast.success(
+        format === 'pdf' ? 'PDF downloaded successfully!' : 'ZIP archive downloaded!'
+      )
+      refreshAll()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Download failed'
       toast.error(msg)
     } finally {
-      setDownloading(false)
+      setDownloading(null)
       setTimeout(() => setDownloadProgress(0), 1500)
     }
   }
@@ -312,9 +404,30 @@ export default function Home() {
     try {
       await fetch(`/api/scribd/history?id=${id}`, { method: 'DELETE' })
       setHistory((prev) => prev.filter((h) => h.id !== id))
+      loadStats()
       toast.success('Removed from history')
     } catch {
       toast.error('Failed to delete')
+    }
+  }
+
+  async function toggleFavorite(item: HistoryItem) {
+    const newFav = !item.favorite
+    setHistory((prev) =>
+      prev.map((h) => (h.id === item.id ? { ...h, favorite: newFav } : h))
+    )
+    try {
+      await fetch(`/api/scribd/history?id=${item.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ favorite: newFav }),
+      })
+    } catch {
+      // revert on failure
+      setHistory((prev) =>
+        prev.map((h) => (h.id === item.id ? { ...h, favorite: !newFav } : h))
+      )
+      toast.error('Failed to update favorite')
     }
   }
 
@@ -322,10 +435,22 @@ export default function Home() {
     try {
       await fetch('/api/scribd/history', { method: 'DELETE' })
       setHistory([])
+      setStats(null)
       toast.success('History cleared')
     } catch {
       toast.error('Failed to clear history')
     }
+  }
+
+  function exportHistory() {
+    if (history.length === 0) {
+      toast.error('No history to export')
+      return
+    }
+    const data = JSON.stringify(history, null, 2)
+    const blob = new Blob([data], { type: 'application/json' })
+    triggerDownload(blob, `scribd-history-${Date.now()}.json`)
+    toast.success('History exported as JSON')
   }
 
   function sanitize(name: string): string {
@@ -367,10 +492,67 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  // Page selection helpers
+  function togglePageSelection(idx: number) {
+    setSelectedPages((prev) => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
+  }
+
+  function selectAllPages() {
+    if (!docInfo) return
+    setSelectedPages(new Set(docInfo.pages.map((p) => p.index)))
+  }
+
+  function clearPageSelection() {
+    setSelectedPages(new Set())
+  }
+
+  function downloadSelectedPages() {
+    if (!docInfo || selectedPages.size === 0) return
+    const indices = Array.from(selectedPages).sort((a, b) => a - b)
+    const range = indices.map((i) => i + 1).join(',')
+    setPageRange(range)
+    toast.info(`Downloading ${indices.length} selected pages`)
+    handleDownload('pdf')
+  }
+
+  // Filtered history based on search and favorites
+  const filteredHistory = React.useMemo(() => {
+    return history.filter((item) => {
+      if (favoritesOnly && !item.favorite) return false
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase()
+        return (
+          item.title.toLowerCase().includes(q) ||
+          item.author?.toLowerCase().includes(q) ||
+          item.docId.includes(q)
+        )
+      }
+      return true
+    })
+  }, [history, favoritesOnly, searchQuery])
+
+  // Compute selected range description
+  const selectedRangeText = React.useMemo(() => {
+    if (selectedPages.size === 0) return 'All pages'
+    if (selectedPages.size === docInfo?.pages.length) return 'All pages'
+    return `${selectedPages.size} of ${docInfo?.pages.length} pages selected`
+  }, [selectedPages, docInfo])
+
   return (
     <div className="min-h-screen flex flex-col bg-background">
+      {/* Decorative background blobs */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div className="absolute -top-40 -left-40 h-96 w-96 rounded-full bg-primary/10 blur-3xl" />
+        <div className="absolute top-1/3 -right-40 h-96 w-96 rounded-full bg-accent/10 blur-3xl" />
+      </div>
+
       {/* Header */}
-      <header className="sticky top-0 z-50 w-full border-b border-border/60 bg-background/80 backdrop-blur-lg">
+      <header className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur-lg">
         <div className="container mx-auto max-w-6xl px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
@@ -378,10 +560,27 @@ export default function Home() {
             </div>
             <div className="flex flex-col leading-none">
               <span className="font-bold text-base tracking-tight">Scribd Downloader</span>
-              <span className="text-[10px] text-muted-foreground hidden sm:block">Preview & download documents</span>
+              <span className="text-[10px] text-muted-foreground hidden sm:block">
+                Preview & download documents
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full"
+                    onClick={() => setShowShortcuts((s) => !s)}
+                  >
+                    <Keyboard className="h-5 w-5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Keyboard shortcuts</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <Badge variant="secondary" className="hidden md:flex gap-1.5">
               <Sparkles className="h-3 w-3" />
               Free
@@ -391,11 +590,10 @@ export default function Home() {
         </div>
       </header>
 
-      <main className="flex-1">
+      <main className="flex-1 relative">
         {/* Hero Section */}
         <section className="relative overflow-hidden">
           <div className="absolute inset-0 grid-bg opacity-50" />
-          <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
           <div className="container relative mx-auto max-w-4xl px-4 pt-16 pb-10 sm:pt-24 sm:pb-14 text-center">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -413,7 +611,8 @@ export default function Home() {
               </h1>
               <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto mb-8">
                 Paste any Scribd document link below to preview its pages and download the
-                full document as a PDF or individual images. Clean, fast, and free.
+                full document as a PDF, a ZIP of images, or individual pages. Clean, fast,
+                and free.
               </p>
             </motion.div>
 
@@ -425,10 +624,11 @@ export default function Home() {
               transition={{ duration: 0.5, delay: 0.1 }}
               className="mx-auto max-w-2xl"
             >
-              <div className="relative flex flex-col sm:flex-row gap-2 p-2 bg-card border border-border rounded-2xl shadow-lg shadow-primary/5">
+              <div className="relative flex flex-col sm:flex-row gap-2 p-2 bg-card border border-border rounded-2xl shadow-lg shadow-primary/5 focus-within:ring-2 focus-within:ring-primary/30 transition-all">
                 <div className="relative flex-1">
                   <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
+                    ref={inputRef}
                     type="text"
                     placeholder="https://www.scribd.com/document/..."
                     value={url}
@@ -489,12 +689,12 @@ export default function Home() {
               </span>
             </motion.div>
 
-            {/* Demo button */}
+            {/* Demo + Shortcuts buttons */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.5, delay: 0.4 }}
-              className="mt-4"
+              className="mt-4 flex items-center justify-center gap-2"
             >
               <Button
                 variant="ghost"
@@ -506,9 +706,61 @@ export default function Home() {
                 <Sparkles className="h-3.5 w-3.5" />
                 Try with sample data
               </Button>
+              <span className="text-muted-foreground/40">•</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowShortcuts(true)}
+                className="text-muted-foreground gap-1.5"
+              >
+                <Keyboard className="h-3.5 w-3.5" />
+                Shortcuts
+              </Button>
             </motion.div>
           </div>
         </section>
+
+        {/* Statistics Dashboard */}
+        {stats && stats.totalDownloads > 0 && (
+          <section className="container mx-auto max-w-5xl px-4 pb-4">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4 }}
+              className="grid grid-cols-2 lg:grid-cols-4 gap-3"
+            >
+              <StatCard
+                icon={Download}
+                label="Total Downloads"
+                value={stats.totalDownloads}
+                color="primary"
+                sublabel={`${stats.todayCount} today`}
+              />
+              <StatCard
+                icon={FileText}
+                label="Total Pages"
+                value={stats.totalPages}
+                color="chart-2"
+                sublabel="across all docs"
+              />
+              <StatCard
+                icon={HardDrive}
+                label="Storage Used"
+                value={0}
+                displayValue={formatBytes(stats.totalSize)}
+                color="chart-4"
+                sublabel="downloaded"
+              />
+              <StatCard
+                icon={TrendingUp}
+                label="This Week"
+                value={stats.recentCount}
+                color="chart-1"
+                sublabel={`${stats.pdfCount} PDF • ${stats.zipCount} ZIP`}
+              />
+            </motion.div>
+          </section>
+        )}
 
         {/* Error Display */}
         <div className="container mx-auto max-w-4xl px-4">
@@ -518,7 +770,7 @@ export default function Home() {
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                className="mb-6"
+                className="mb-6 mt-6"
               >
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
@@ -548,7 +800,7 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="space-y-6"
+                className="space-y-6 mt-6"
               >
                 <div className="flex flex-col sm:flex-row gap-6">
                   <Skeleton className="w-full sm:w-48 h-64 rounded-xl" />
@@ -583,7 +835,7 @@ export default function Home() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.4 }}
-                className="space-y-8"
+                className="space-y-8 mt-6"
               >
                 {/* Demo / Warning Banner */}
                 {(docInfo.isDemo || docInfo.warning) && (
@@ -628,9 +880,7 @@ export default function Home() {
                             {docInfo.pageCount} pages
                           </Badge>
                           {docInfo.author && (
-                            <Badge variant="outline">
-                              {docInfo.author}
-                            </Badge>
+                            <Badge variant="outline">{docInfo.author}</Badge>
                           )}
                         </div>
                       </div>
@@ -645,14 +895,37 @@ export default function Home() {
                       <div className="text-xs text-muted-foreground mb-4 truncate">
                         Source: {docInfo.sourceUrl}
                       </div>
+
+                      {/* Page Range Input */}
+                      <div className="mb-4">
+                        <Label
+                          htmlFor="page-range"
+                          className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1.5"
+                        >
+                          <ListChecks className="h-3 w-3" />
+                          Page range (optional)
+                          <span className="text-muted-foreground/60">
+                            e.g. 1-5 or 1,3,5-8
+                          </span>
+                        </Label>
+                        <Input
+                          id="page-range"
+                          type="text"
+                          placeholder="Leave empty for all pages"
+                          value={pageRange}
+                          onChange={(e) => setPageRange(e.target.value)}
+                          className="h-9 text-sm max-w-xs"
+                        />
+                      </div>
+
                       <div className="mt-auto flex flex-wrap gap-2">
                         <Button
-                          onClick={handleDownloadPdf}
-                          disabled={downloading || docInfo.pages.length === 0}
+                          onClick={() => handleDownload('pdf')}
+                          disabled={downloading !== null || docInfo.pages.length === 0}
                           className="gap-2"
                           size="lg"
                         >
-                          {downloading ? (
+                          {downloading === 'pdf' ? (
                             <>
                               <Loader2 className="h-4 w-4 animate-spin" />
                               Generating PDF...
@@ -664,17 +937,36 @@ export default function Home() {
                             </>
                           )}
                         </Button>
+                        <Button
+                          onClick={() => handleDownload('zip')}
+                          disabled={downloading !== null || docInfo.pages.length === 0}
+                          variant="outline"
+                          className="gap-2"
+                          size="lg"
+                        >
+                          {downloading === 'zip' ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Zipping...
+                            </>
+                          ) : (
+                            <>
+                              <FileArchive className="h-4 w-4" />
+                              Download ZIP
+                            </>
+                          )}
+                        </Button>
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
-                                variant="outline"
+                                variant="ghost"
                                 size="lg"
                                 onClick={() => window.open(docInfo.sourceUrl, '_blank')}
                                 className="gap-2"
                               >
                                 <Globe className="h-4 w-4" />
-                                Open Source
+                                Source
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>Open the original Scribd page</TooltipContent>
@@ -684,7 +976,7 @@ export default function Home() {
 
                       {/* Download Progress */}
                       <AnimatePresence>
-                        {downloading && (
+                        {downloading !== null && (
                           <motion.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: 'auto' }}
@@ -692,7 +984,10 @@ export default function Home() {
                             className="mt-4"
                           >
                             <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
-                              <span>Generating your PDF...</span>
+                              <span className="flex items-center gap-1.5">
+                                <Package className="h-3 w-3" />
+                                Generating your {downloading.toUpperCase()}...
+                              </span>
                               <span>{downloadProgress}%</span>
                             </div>
                             <Progress value={downloadProgress} className="h-1.5" />
@@ -706,65 +1001,124 @@ export default function Home() {
                 {/* Page Preview Grid */}
                 {docInfo.pages.length > 0 && (
                   <div>
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
                       <h3 className="text-lg font-semibold flex items-center gap-2">
                         <ImageIcon className="h-5 w-5 text-primary" />
                         Page Preview
                         <Badge variant="secondary">{docInfo.pages.length} pages</Badge>
                       </h3>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-muted-foreground">{selectedRangeText}</span>
+                        <Separator orientation="vertical" className="h-4" />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={selectAllPages}
+                          className="h-7 text-xs gap-1"
+                        >
+                          <Check className="h-3 w-3" />
+                          Select all
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={clearPageSelection}
+                          className="h-7 text-xs gap-1"
+                        >
+                          <X className="h-3 w-3" />
+                          Clear
+                        </Button>
+                        {selectedPages.size > 0 && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={downloadSelectedPages}
+                            className="h-7 text-xs gap-1"
+                          >
+                            <Download className="h-3 w-3" />
+                            Download {selectedPages.size}
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-[600px] overflow-y-auto scrollbar-custom p-1">
-                      {docInfo.pages.map((page) => (
-                        <motion.div
-                          key={page.index}
-                          initial={{ opacity: 0, scale: 0.95 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          transition={{ duration: 0.2, delay: Math.min(page.index * 0.02, 0.5) }}
-                          className="group relative aspect-[3/4] rounded-lg overflow-hidden border border-border bg-muted cursor-pointer"
-                          onClick={() => setPreviewPage(page)}
-                        >
-                          <img
-                            src={page.url}
-                            alt={`Page ${page.index + 1}`}
-                            className="h-full w-full object-contain transition-transform group-hover:scale-105"
-                            loading="lazy"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex flex-col items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                            <span className="text-white text-xs font-medium bg-black/50 px-2 py-0.5 rounded">
-                              Page {page.index + 1}
-                            </span>
-                            <div className="flex gap-1.5">
-                              <Button
-                                size="icon"
-                                variant="secondary"
-                                className="h-8 w-8"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setPreviewPage(page)
-                                }}
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="icon"
-                                variant="secondary"
-                                className="h-8 w-8"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  downloadPageImage(page)
-                                }}
-                              >
-                                <Download className="h-4 w-4" />
-                              </Button>
+                      {docInfo.pages.map((page) => {
+                        const isSelected = selectedPages.has(page.index)
+                        return (
+                          <motion.div
+                            key={page.index}
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{
+                              duration: 0.2,
+                              delay: Math.min(page.index * 0.02, 0.5),
+                            }}
+                            className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 bg-muted cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'border-primary'
+                                : 'border-border hover:border-primary/40'
+                            }`}
+                            onClick={() => setPreviewPage(page)}
+                          >
+                            <img
+                              src={page.url}
+                              alt={`Page ${page.index + 1}`}
+                              className="h-full w-full object-contain transition-transform group-hover:scale-105"
+                              loading="lazy"
+                            />
+                            {/* Selection checkbox */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                togglePageSelection(page.index)
+                              }}
+                              className={`absolute top-2 left-2 h-6 w-6 rounded-md flex items-center justify-center transition-all ${
+                                isSelected
+                                  ? 'bg-primary text-primary-foreground opacity-100'
+                                  : 'bg-black/40 text-white opacity-0 group-hover:opacity-100'
+                              }`}
+                              aria-label="Select page"
+                            >
+                              {isSelected && <Check className="h-3.5 w-3.5" />}
+                            </button>
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex flex-col items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                              <span className="text-white text-xs font-medium bg-black/50 px-2 py-0.5 rounded">
+                                Page {page.index + 1}
+                              </span>
+                              <div className="flex gap-1.5">
+                                <Button
+                                  size="icon"
+                                  variant="secondary"
+                                  className="h-8 w-8"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setPreviewPage(page)
+                                  }}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="secondary"
+                                  className="h-8 w-8"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    downloadPageImage(page)
+                                  }}
+                                >
+                                  <Download className="h-4 w-4" />
+                                </Button>
+                              </div>
                             </div>
-                          </div>
-                          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2 py-1">
-                            <span className="text-white text-[10px] font-medium">
-                              Page {page.index + 1}
-                            </span>
-                          </div>
-                        </motion.div>
-                      ))}
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2 py-1">
+                              <span className="text-white text-[10px] font-medium">
+                                Page {page.index + 1}
+                              </span>
+                            </div>
+                          </motion.div>
+                        )
+                      })}
                     </div>
                   </div>
                 )}
@@ -775,7 +1129,7 @@ export default function Home() {
 
         {/* Download History */}
         <section className="container mx-auto max-w-5xl px-4 py-12">
-          <div className="flex items-center justify-between mb-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
             <h3 className="text-lg font-semibold flex items-center gap-2">
               <Clock className="h-5 w-5 text-primary" />
               Download History
@@ -784,17 +1138,62 @@ export default function Home() {
               )}
             </h3>
             {history.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={clearHistory}
-                className="text-muted-foreground hover:text-destructive gap-1.5"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear All
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={exportHistory}
+                  className="gap-1.5"
+                >
+                  <FileArchive className="h-3.5 w-3.5" />
+                  Export
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearHistory}
+                  className="text-muted-foreground hover:text-destructive gap-1.5"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Clear All
+                </Button>
+              </div>
             )}
           </div>
+
+          {/* Search + Filter Bar */}
+          {history.length > 0 && (
+            <div className="flex flex-col sm:flex-row gap-3 mb-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search by title, author, or doc ID..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 h-10"
+                />
+              </div>
+              <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-card">
+                <Switch
+                  id="fav-filter"
+                  checked={favoritesOnly}
+                  onCheckedChange={setFavoritesOnly}
+                />
+                <Label
+                  htmlFor="fav-filter"
+                  className="text-sm flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Star
+                    className={`h-3.5 w-3.5 ${
+                      favoritesOnly ? 'fill-amber-400 text-amber-400' : ''
+                    }`}
+                  />
+                  Favorites only
+                </Label>
+              </div>
+            </div>
+          )}
 
           {historyLoading ? (
             <div className="space-y-2">
@@ -810,14 +1209,30 @@ export default function Home() {
                 </div>
                 <p className="text-sm font-medium mb-1">No downloads yet</p>
                 <p className="text-xs text-muted-foreground max-w-xs">
-                  Your downloaded documents will appear here for easy access.
+                  Your downloaded documents will appear here for easy access. Try the
+                  sample data button above to get started.
+                </p>
+              </CardContent>
+            </Card>
+          ) : filteredHistory.length === 0 ? (
+            <Card className="border-dashed">
+              <CardContent className="flex flex-col items-center justify-center py-10 text-center">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted mb-2">
+                  <Search className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <p className="text-sm font-medium">No matching results</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Try a different search query or filter.
                 </p>
               </CardContent>
             </Card>
           ) : (
             <div className="space-y-2 max-h-96 overflow-y-auto scrollbar-custom pr-1">
-              {history.map((item) => (
-                <Card key={item.id} className="border-border/60 hover:shadow-md transition-shadow">
+              {filteredHistory.map((item) => (
+                <Card
+                  key={item.id}
+                  className="border-border/60 hover:shadow-md transition-shadow group"
+                >
                   <CardContent className="flex items-center gap-3 p-3">
                     <div className="h-16 w-12 shrink-0 rounded bg-muted overflow-hidden flex items-center justify-center">
                       {item.thumbnail ? (
@@ -841,10 +1256,39 @@ export default function Home() {
                           <Download className="h-3 w-3" />
                           {formatBytes(item.fileSize)}
                         </span>
-                        <span>{formatDate(item.createdAt)}</span>
+                        <Badge variant="outline" className="h-4 text-[10px] px-1">
+                          {item.format.toUpperCase()}
+                        </Badge>
+                        <span className="flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          {formatDate(item.createdAt)}
+                        </span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-8 w-8"
+                              onClick={() => toggleFavorite(item)}
+                            >
+                              <Star
+                                className={`h-4 w-4 ${
+                                  item.favorite
+                                    ? 'fill-amber-400 text-amber-400'
+                                    : 'text-muted-foreground'
+                                }`}
+                              />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {item.favorite ? 'Remove from favorites' : 'Add to favorites'}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
                       <Button
                         size="icon"
                         variant="ghost"
@@ -884,7 +1328,7 @@ export default function Home() {
               {
                 icon: Zap,
                 title: 'Lightning Fast',
-                desc: 'Fetch and generate PDFs in seconds with our optimized pipeline.',
+                desc: 'Fetch and generate PDFs or ZIPs in seconds with our optimized pipeline.',
               },
               {
                 icon: ShieldCheck,
@@ -894,22 +1338,37 @@ export default function Home() {
               {
                 icon: Eye,
                 title: 'Page Preview',
-                desc: 'See every page before downloading. Pick what you need.',
+                desc: 'See every page before downloading. Pick exactly what you need.',
               },
               {
-                icon: FileImage,
+                icon: FileArchive,
                 title: 'Multiple Formats',
-                desc: 'Download as a single PDF or grab individual page images.',
+                desc: 'Download as PDF, a ZIP of images, or grab individual page images.',
+              },
+              {
+                icon: ListChecks,
+                title: 'Page Range Selection',
+                desc: 'Choose specific pages or ranges like 1-5, 8, 12-15 for targeted downloads.',
+              },
+              {
+                icon: TrendingUp,
+                title: 'Stats Dashboard',
+                desc: 'Track your downloads, pages, and storage usage with live counters.',
+              },
+              {
+                icon: Star,
+                title: 'Favorites & Search',
+                desc: 'Star important docs, search your history, and export it anytime.',
+              },
+              {
+                icon: Keyboard,
+                title: 'Keyboard Shortcuts',
+                desc: 'Power-user shortcuts: Ctrl+K to focus, Ctrl+Enter to fetch, Ctrl+D for demo.',
               },
               {
                 icon: Globe,
                 title: 'Fully Responsive',
                 desc: 'Works beautifully on desktop, tablet, and mobile devices.',
-              },
-              {
-                icon: Clock,
-                title: 'Download History',
-                desc: 'Your past downloads are saved so you can revisit them anytime.',
               },
             ].map((f, i) => (
               <motion.div
@@ -917,11 +1376,11 @@ export default function Home() {
                 initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
-                transition={{ duration: 0.4, delay: i * 0.05 }}
+                transition={{ duration: 0.4, delay: (i % 3) * 0.05 }}
               >
-                <Card className="h-full border-border/60 hover:border-primary/40 hover:shadow-md transition-all">
+                <Card className="h-full border-border/60 hover:border-primary/40 hover:shadow-md transition-all group">
                   <CardContent className="p-5">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary mb-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary mb-3 group-hover:scale-110 transition-transform">
                       <f.icon className="h-5 w-5" />
                     </div>
                     <h3 className="font-semibold mb-1">{f.title}</h3>
@@ -977,7 +1436,7 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-border/60 bg-muted/30">
+      <footer className="mt-auto border-t border-border/60 bg-muted/30 relative z-10">
         <div className="container mx-auto max-w-6xl px-4 py-8">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2.5">
@@ -999,8 +1458,8 @@ export default function Home() {
           </div>
           <Separator className="my-5" />
           <p className="text-center text-xs text-muted-foreground">
-            © {new Date().getFullYear()} Scribd Downloader. Not affiliated with Scribd, Inc.
-            All trademarks belong to their respective owners.
+            © {new Date().getFullYear()} Scribd Downloader. Not affiliated with Scribd,
+            Inc. All trademarks belong to their respective owners.
           </p>
         </div>
       </footer>
@@ -1058,6 +1517,115 @@ export default function Home() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Keyboard Shortcuts Modal */}
+      <AnimatePresence>
+        {showShortcuts && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => setShowShortcuts(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Card className="shadow-2xl">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <Keyboard className="h-5 w-5 text-primary" />
+                      Keyboard Shortcuts
+                    </h3>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8"
+                      onClick={() => setShowShortcuts(false)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <div className="space-y-2.5">
+                    {SHORTCUTS.map((s) => (
+                      <div
+                        key={s.keys}
+                        className="flex items-center justify-between py-2 border-b border-border/40 last:border-0"
+                      >
+                        <span className="text-sm text-muted-foreground">{s.desc}</span>
+                        <kbd className="px-2.5 py-1 text-xs font-mono font-semibold rounded-md bg-muted border border-border">
+                          {s.keys}
+                        </kbd>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-4 pt-4 border-t border-border/60">
+                    <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+                      <Sparkles className="h-3 w-3 mt-0.5 shrink-0" />
+                      Tip: You can also paste a Scribd URL anywhere on the page and it
+                      will be auto-filled into the input.
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
+  )
+}
+
+// ---------- Stat Card Component ----------
+interface StatCardProps {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: number
+  displayValue?: string
+  sublabel: string
+  color: 'primary' | 'chart-1' | 'chart-2' | 'chart-4'
+}
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  displayValue,
+  sublabel,
+  color,
+}: StatCardProps) {
+  const colorMap = {
+    primary: 'bg-primary/10 text-primary',
+    'chart-1': 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
+    'chart-2': 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
+    'chart-4': 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  }
+
+  return (
+    <Card className="border-border/60 overflow-hidden relative group hover:shadow-md transition-shadow">
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between mb-2">
+          <span className="text-xs font-medium text-muted-foreground">{label}</span>
+          <div
+            className={`flex h-8 w-8 items-center justify-center rounded-lg ${colorMap[color]}`}
+          >
+            <Icon className="h-4 w-4" />
+          </div>
+        </div>
+        <div className="text-2xl font-bold tracking-tight tabular-nums">
+          {displayValue ? (
+            <span>{displayValue}</span>
+          ) : (
+            <AnimatedCounter value={value} />
+          )}
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-1">{sublabel}</p>
+      </CardContent>
+    </Card>
   )
 }

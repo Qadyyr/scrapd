@@ -42,5 +42,6 @@ model DownloadHistory {
   format      String   @default("pdf")
   status      String   @default("completed")
   fileSize    Int      @default(0)
+  favorite    Boolean  @default(false)
   createdAt   DateTime @default(now())
 }
