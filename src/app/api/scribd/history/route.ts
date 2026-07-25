@@ -25,10 +25,9 @@ export async function GET(req: NextRequest) {
     })
     return NextResponse.json({ items })
   } catch {
-    return NextResponse.json(
-      { error: 'Failed to load history.', items: [] },
-      { status: 500 }
-    )
+    // Database may be unavailable on serverless platforms (read-only FS).
+    // Return empty list so the UI still works.
+    return NextResponse.json({ items: [] })
   }
 }
 

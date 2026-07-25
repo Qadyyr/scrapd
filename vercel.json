@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "src/app/api/scribd/info/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/scribd/download/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/scribd/download-zip/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/scribd/download-txt/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}

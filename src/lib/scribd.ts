@@ -366,18 +366,56 @@ interface PageReaderClient {
 }
 
 /**
+ * Create a z-ai SDK client. The SDK normally reads from a `.z-ai-config` file,
+ * but that doesn't exist on serverless platforms (Vercel). So we check for
+ * environment variables first (ZAI_BASE_URL, ZAI_API_KEY), and if present,
+ * instantiate the client directly. Otherwise, fall back to the file-based
+ * `create()` method (which works in local dev where .z-ai-config exists).
+ */
+async function createZaiClient(): Promise<PageReaderClient> {
+  const ZAIModule = await import('z-ai-web-dev-sdk')
+  const ZAI = (
+    ZAIModule as unknown as {
+      default: {
+        create: () => Promise<PageReaderClient>
+        new (config: ZaiConfig): PageReaderClient
+      }
+    }
+  ).default
+
+  // Try environment variables first (works on Vercel / serverless)
+  const baseUrl = process.env.ZAI_BASE_URL
+  const apiKey = process.env.ZAI_API_KEY
+  if (baseUrl && apiKey) {
+    const config: ZaiConfig = {
+      baseUrl,
+      apiKey,
+      chatId: process.env.ZAI_CHAT_ID || '',
+      userId: process.env.ZAI_USER_ID || '',
+      token: process.env.ZAI_TOKEN || '',
+    }
+    return new ZAI(config)
+  }
+
+  // Fall back to file-based config (local dev with .z-ai-config)
+  return ZAI.create()
+}
+
+interface ZaiConfig {
+  baseUrl: string
+  apiKey: string
+  chatId?: string
+  userId?: string
+  token?: string
+}
+
+/**
  * Fetch a Scribd document page using the z-ai page_reader function,
  * which uses a managed service that bypasses Cloudflare anti-bot protection.
  * Returns the raw HTML content of the page.
  */
 async function fetchViaPageReader(url: string): Promise<string> {
-  const ZAIModule = await import('z-ai-web-dev-sdk')
-  const ZAI = (
-    ZAIModule as unknown as {
-      default: { create: () => Promise<PageReaderClient> }
-    }
-  ).default
-  const client = await ZAI.create()
+  const client = await createZaiClient()
 
   const result = await client.functions.invoke('page_reader', { url })
   const html: string = result?.data?.html || ''
