@@ -385,8 +385,12 @@ async function fetchViaPageReader(url: string): Promise<string> {
 
 /**
  * Clean and extract the actual document text from a Scribd page's HTML.
- * Removes navigation, scripts, styles, cookie banners, and boilerplate,
- * keeping the readable document content.
+ *
+ * Scribd renders documents as positioned `<span>` fragments. Reading them
+ * in DOM order via `body.text()` gives roughly-correct reading order, but
+ * individual letters/words sometimes land on their own lines (e.g. "in"
+ * split into "i" + "n" across two text nodes). We post-process to join
+ * fragment lines back into proper sentences.
  */
 function extractDocumentText(html: string): string {
   const $ = cheerio.load(html)
@@ -415,10 +419,30 @@ function extractDocumentText(html: string): string {
   bodyText = bodyText
     .replace(/\u00a0/g, ' ')
     .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l.length > 0)
+    .join('\n')
+
+  // Remove repetitive garbage (e.g. "scribd.scribd.scribd...")
+  // Check for any short token that repeats 4+ times ANYWHERE in the line.
+  bodyText = bodyText
+    .split('\n')
+    .filter((line) => {
+      // "scribd.scribd.scribd.scribd" or "a b a b a b a b"
+      if (/(.{1,15}?)([.\s]\1){3,}/.test(line)) return false
+      // Lines that are just dots/periods/dashes
+      if (/^[\s.\-_=*]{5,}$/.test(line)) return false
+      // Lines where a single word repeats 6+ times
+      const words = line.toLowerCase().split(/[\s.]+/).filter(Boolean)
+      if (words.length >= 6) {
+        const counts: Record<string, number> = {}
+        for (const w of words) counts[w] = (counts[w] || 0) + 1
+        const maxCount = Math.max(...Object.values(counts))
+        if (maxCount / words.length > 0.6) return false
+      }
+      return true
+    })
     .join('\n')
 
   // Remove obvious boilerplate phrases
@@ -460,15 +484,43 @@ function extractDocumentText(html: string): string {
     .split('\n')
     .filter((line) => !boilerplate.some((re) => re.test(line)))
     .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
 
-  // Cut everything before the "You are on page N" marker — that's where the
-  // actual document body content begins on Scribd pages.
+  // Cut everything before the "You are on page N" marker — that's where
+  // the actual document body content begins on Scribd pages.
   const pageMarker = bodyText.match(/You are on page\s*\d+\s*\d*/i)
   if (pageMarker && pageMarker.index !== undefined) {
     bodyText = bodyText.slice(pageMarker.index + pageMarker[0].length).trim()
   }
+
+  // --- Join fragment lines ---
+  // Scribd's positioned spans sometimes split a word across lines, e.g.:
+  //   "Maintenance Rights For Muslim Wives"
+  //   "n"                          ← fragment of "in"
+  //   "India: Legal Response"
+  // A line of 1-3 chars is almost certainly a fragment. We join it to the
+  // previous line WITH a space (fragments are typically the start of a new
+  // word, not a continuation of the previous word's last letter).
+  const lines = bodyText.split('\n')
+  const joined: string[] = []
+  for (const line of lines) {
+    const prev = joined.length > 0 ? joined[joined.length - 1] : ''
+    const isFragment =
+      line.length <= 3 &&
+      !/^[.!?;:,]$/.test(line) &&
+      !/^\d+$/.test(line) &&
+      prev.length > 0
+
+    if (isFragment) {
+      // Always add a space before the fragment — it's the start of a new word
+      joined[joined.length - 1] = prev + ' ' + line
+    } else {
+      joined.push(line)
+    }
+  }
+  bodyText = joined.join('\n')
+
+  // Collapse 3+ newlines to 2
+  bodyText = bodyText.replace(/\n{3,}/g, '\n\n').trim()
 
   return bodyText
 }

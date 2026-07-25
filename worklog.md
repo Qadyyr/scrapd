@@ -287,3 +287,68 @@ Current Status:
 
 Unresolved Issues / Risks:
 - Replacing Unicode chars with ASCII equivalents loses some fidelity (e.g. modifier letters become regular letters, combining diacritics are dropped). This is an inherent limitation of pdf-lib's StandardFonts. A future enhancement could embed a full Unicode TTF font (e.g. Noto Sans) via `pdfDoc.embedFont(ttfBytes)` with custom encoding, which would preserve all original characters at the cost of a larger PDF (~300KB font overhead).
+
+---
+Task ID: 6
+Agent: Main (real document download fix)
+Task: Fix "it doesn't download real documents or PDFs" — improve text extraction quality and add TXT download option
+
+Work Log:
+- Investigated the actual download behavior: the PDF download WAS working (HTTP 200, 15.6KB), but the extracted text had quality issues:
+  1. Words were broken across lines ("Wives\nn\nIndia" instead of "Wives in India") due to Scribd's positioned-span rendering
+  2. Garbage "scribd.scribd.scribd..." repeated hundreds of times at the end
+- First attempt: rewrote extractDocumentText() to parse positioned `<span class="a" style="top:Xpx;left:Ypx">` elements and reconstruct reading order by sorting by top/left coordinates. This made things WORSE because Scribd renders all pages in one HTML with overlapping coordinate spaces (different pages share the same coordinate range), so spans from different pages got interleaved.
+- Reverted to the simpler `$('body').text()` approach (DOM order roughly matches reading order) with improved post-processing:
+  - Fragment joining: lines of 1-3 chars are joined to the previous line WITH a space (they're typically the start of a new word that got split)
+  - Improved garbage filter: checks for any short token repeating 4+ times ANYWHERE in the line (not just from line start), plus word-frequency analysis (if one word is >60% of the line, it's garbage)
+  - Boilerplate removal for Scribd UI elements
+- Verified the extracted text is now readable: "Maintenance Rights For Muslim Wives in India Legal Response / MAINTENANCE RIGHTS FOR MUSLIM WIVES IN INDIA LEGAL RESPONSE / Raihanah Abdullah· ABSTRAK / Hak untuk mendapatkan najkah bagi isteri..."
+- Verified the generated PDF contains real document text using `pdftotext`:
+  ```
+  Maintenance Rights For Muslim Wives in India Legal Response
+  by Abhijithsr Tvpm
+  A comprehensive approach on Indian Muslim Personal Law
+  Maintenance Rights For Muslim Wives n India: Legal Response
+  MAINTENANCE RIGHTS FOR MUSLIM WIVES IN INDIA LEGAL RESPONSE
+  Raihanah Abdullah· ABSTRAK Hak untuk mendapatkan najkah...
+  ```
+- Added new TXT download option (most reliable format — no encoding/font limitations):
+  - Created `src/app/api/scribd/download-txt/route.ts` — returns a plain text file with header (title, author, description, source, date) + full text content
+  - Updated frontend handleDownload() to support 'txt' format
+  - Added "Download TXT" button in the UI (with FileText icon, loading state)
+  - Updated toast messages for all three formats
+  - Updated downloading state type to include 'txt'
+- QA verified with agent-browser:
+  - Real URL fetch: "Maintenance Rights For Muslim Wives in India Legal Response" with live content
+  - PDF download: POST /api/scribd/download 200, 15.6KB, contains real text
+  - TXT download: POST /api/scribd/download-txt 200, 18KB, contains real text
+  - All three download buttons (PDF, ZIP, TXT) work end-to-end
+  - History updates correctly after each download
+
+QA Verification:
+- Real Scribd document: https://www.scribd.com/document/391715321/...
+  - Text content: 17,700 chars of real document text (readable, coherent)
+  - PDF: 15.6KB, 200 text blocks, pdftotext confirms real content
+  - TXT: 18KB, header + full text, opens cleanly in any text editor
+  - ZIP: includes document.txt + metadata.json + cover image
+- All downloads trigger browser file save correctly
+- No console errors, lint clean
+
+Stage Summary:
+- ✅ Real documents ARE downloaded — PDF contains real text content (verified via pdftotext)
+- ✅ Text extraction quality improved: readable, coherent document content
+- ✅ Added TXT download as the most reliable format (no font/encoding limitations)
+- ✅ Three download formats available: PDF (text-based, searchable), ZIP (text + images + metadata), TXT (plain text)
+- ✅ All downloads work end-to-end in the browser
+
+Current Status:
+- The app downloads REAL document content from REAL Scribd URLs
+- Three format options ensure users can always get usable content
+- Text extraction produces readable, coherent document text
+- PDFs are searchable and selectable (text-based, not images)
+
+Unresolved Issues / Risks:
+- Scribd's positioned-span rendering drops some single letters (e.g. "of" becomes "o", "in" becomes "n") — this is an inherent limitation of Scribd's preview rendering, not fixable without the original source file
+- Some words may be concatenated without spaces ("ofIslamic" instead of "of Islamic") due to span boundary artifacts
+- The text is a reconstruction from Scribd's preview rendering, not the original document file — formatting (columns, tables, images) is not preserved
+- For documents where Scribd doesn't index text (image-only scans), no text content is available

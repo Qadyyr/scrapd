@@ -156,7 +156,7 @@ export default function Home() {
   const [loading, setLoading] = React.useState(false)
   const [docInfo, setDocInfo] = React.useState<DocInfo | null>(null)
   const [error, setError] = React.useState<string | null>(null)
-  const [downloading, setDownloading] = React.useState<'pdf' | 'zip' | null>(null)
+  const [downloading, setDownloading] = React.useState<'pdf' | 'zip' | 'txt' | null>(null)
   const [downloadProgress, setDownloadProgress] = React.useState(0)
   const [history, setHistory] = React.useState<HistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = React.useState(true)
@@ -315,7 +315,7 @@ export default function Home() {
     }
   }
 
-  async function handleDownload(format: 'pdf' | 'zip') {
+  async function handleDownload(format: 'pdf' | 'zip' | 'txt') {
     if (!docInfo) return
     // Allow download if we have either page images OR text content
     if (docInfo.pages.length === 0 && !docInfo.textContent) return
@@ -324,7 +324,11 @@ export default function Home() {
     setDownloadProgress(0)
 
     try {
-      const endpoint = format === 'pdf' ? '/api/scribd/download' : '/api/scribd/download-zip'
+      let endpoint: string
+      if (format === 'pdf') endpoint = '/api/scribd/download'
+      else if (format === 'zip') endpoint = '/api/scribd/download-zip'
+      else endpoint = '/api/scribd/download-txt'
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -361,7 +365,12 @@ export default function Home() {
             setDownloadProgress(Math.min(100, Math.round((received / total) * 100)))
           }
         }
-        const mimeType = format === 'pdf' ? 'application/pdf' : 'application/zip'
+        const mimeType =
+          format === 'pdf'
+            ? 'application/pdf'
+            : format === 'zip'
+              ? 'application/zip'
+              : 'text/plain'
         const blob = new Blob(chunks as BlobPart[], { type: mimeType })
         triggerDownload(blob, `${sanitize(docInfo.title)}.${format}`)
       } else {
@@ -371,7 +380,11 @@ export default function Home() {
       }
 
       toast.success(
-        format === 'pdf' ? 'PDF downloaded successfully!' : 'ZIP archive downloaded!'
+        format === 'pdf'
+          ? 'PDF downloaded successfully!'
+          : format === 'zip'
+            ? 'ZIP archive downloaded!'
+            : 'Text file downloaded!'
       )
       refreshAll()
     } catch (err) {
@@ -959,6 +972,25 @@ export default function Home() {
                             <>
                               <FileArchive className="h-4 w-4" />
                               Download ZIP
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          onClick={() => handleDownload('txt')}
+                          disabled={downloading !== null || !docInfo.textContent}
+                          variant="outline"
+                          className="gap-2"
+                          size="lg"
+                        >
+                          {downloading === 'txt' ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Saving...
+                            </>
+                          ) : (
+                            <>
+                              <FileText className="h-4 w-4" />
+                              Download TXT
                             </>
                           )}
                         </Button>
