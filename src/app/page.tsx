@@ -902,17 +902,11 @@ export default function Home() {
                           One-time setup: drag this button to your bookmarks bar
                         </p>
                         <div className="flex items-center gap-3 pl-7">
-                          <a
-                            href={bookmarkletHref}
-                            onClick={(e) => {
-                              e.preventDefault()
-                              toast.info('📌 Drag this button to your bookmarks bar!')
+                          <span
+                            dangerouslySetInnerHTML={{
+                              __html: `<a href="${bookmarkletHref}" class="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm font-semibold cursor-grab hover:opacity-90 active:cursor-grabbing transition-opacity shadow-sm"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Extract Scribd</a>`,
                             }}
-                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm font-semibold cursor-grab hover:opacity-90 active:cursor-grabbing transition-opacity shadow-sm"
-                          >
-                            <Download className="h-4 w-4" />
-                            Extract Scribd
-                          </a>
+                          />
                           <span className="text-xs text-muted-foreground">
                             (Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-background border rounded">Ctrl/Cmd+Shift+B</kbd> to show bookmarks bar)
                           </span>
@@ -1959,16 +1953,11 @@ function ExtractModal({
                         <span className="font-bold text-primary shrink-0">1.</span>
                         <span>
                           Drag this link to your bookmarks bar:{' '}
-                          <a
-                            href={bookmarkletCode}
-                            onClick={(e) => {
-                              e.preventDefault()
-                              toast.info('Drag this link to your bookmarks bar!')
+                          <span
+                            dangerouslySetInnerHTML={{
+                              __html: `<a href="${bookmarkletCode}" class="inline-block px-3 py-1 bg-primary text-primary-foreground rounded-md text-xs font-semibold cursor-grab hover:opacity-90">📥 Extract Scribd</a>`,
                             }}
-                            className="inline-block px-3 py-1 bg-primary text-primary-foreground rounded-md text-xs font-semibold cursor-grab hover:opacity-90"
-                          >
-                            📥 Extract Scribd
-                          </a>
+                          />
                         </span>
                       </li>
                       <li className="flex gap-2">
