@@ -97,7 +97,7 @@ async function fetchHtml(url: string): Promise<string> {
  * Try multiple URL variants to fetch the Scribd document HTML.
  * Scribd may block some endpoints but allow others.
  */
-async function fetchScribdHtml(docId: string, originalUrl: string): Promise<string> {
+async function fetchScribdHtmlMulti(docId: string, originalUrl: string): Promise<string> {
   const urlsToTry = [
     originalUrl,
     `https://www.scribd.com/document/${docId}`,
@@ -186,7 +186,7 @@ export async function fetchScribdDocInfo(rawUrl: string): Promise<ScribdDocInfo>
 
   let html: string
   try {
-    html = await fetchScribdHtml(docId, url)
+    html = await fetchScribdHtmlMulti(docId, url)
   } catch (err) {
     throw new Error(
       `Unable to reach Scribd — the site may be blocking automated requests (Cloudflare protection). ${err instanceof Error ? err.message : 'Network error.'} Try again later or try a different document URL.`
@@ -410,6 +410,116 @@ interface ZaiConfig {
 }
 
 /**
+ * Fetch Scribd page HTML using a Cloudflare Worker proxy.
+ *
+ * Cloudflare Workers run on Cloudflare's own network, so fetch() calls
+ * to Scribd are NOT blocked by Cloudflare bot protection. This is the
+ * ONLY reliable free way to fetch Scribd pages from Vercel.
+ *
+ * The worker URL is set via the CF_WORKER_URL env var.
+ * Deploy the worker from the cloudflare-worker/ directory: npx wrangler deploy
+ */
+async function fetchViaCloudflareWorker(url: string): Promise<string> {
+  const workerUrl = process.env.CF_WORKER_URL
+  if (!workerUrl) {
+    throw new Error('CF_WORKER_URL not configured')
+  }
+
+  const proxyUrl = `${workerUrl}?url=${encodeURIComponent(url)}`
+  const res = await fetch(proxyUrl, {
+    signal: AbortSignal.timeout(20000),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Worker returned HTTP ${res.status}`)
+  }
+
+  const html = await res.text()
+  if (!html || html.length < 1000) {
+    throw new Error('Worker returned empty content')
+  }
+
+  // Check for Cloudflare challenge page
+  if (html.includes('Client Challenge') || html.includes('cf-browser-verification')) {
+    throw new Error('Worker received Cloudflare challenge page')
+  }
+
+  return html
+}
+
+/**
+ * Fetch a Scribd document page HTML. Tries multiple strategies:
+ * 1. Cloudflare Worker proxy (if CF_WORKER_URL is set — works on Vercel)
+ * 2. z-ai page_reader (works in z.ai sandbox)
+ * 3. Direct fetch (works if not behind Cloudflare)
+ * Returns the raw HTML content of the page.
+ */
+async function fetchScribdHtml(url: string): Promise<string> {
+  const errors: string[] = []
+
+  // Strategy 1: Cloudflare Worker proxy (PERMANENT FREE SOLUTION for Vercel)
+  if (process.env.CF_WORKER_URL) {
+    try {
+      const html = await fetchViaCloudflareWorker(url)
+      if (html && html.length > 5000 && html.includes('scribd')) {
+        return html
+      }
+    } catch (err) {
+      errors.push(
+        `cf-worker: ${err instanceof Error ? err.message : 'failed'}`
+      )
+    }
+  }
+
+  // Strategy 2: z-ai page_reader (works in z.ai sandbox)
+  try {
+    const html = await fetchViaPageReader(url)
+    if (html && html.length > 5000) {
+      return html
+    }
+  } catch (err) {
+    errors.push(`z-ai: ${err instanceof Error ? err.message : 'failed'}`)
+  }
+
+  // Strategy 3: Direct fetch (rarely works due to Cloudflare, but worth trying)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': randomUA(),
+        Accept:
+          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Upgrade-Insecure-Requests': '1',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
+    })
+    if (res.ok) {
+      const html = await res.text()
+      if (
+        html &&
+        html.length > 5000 &&
+        html.includes('scribd') &&
+        !html.includes('Client Challenge') &&
+        !html.includes('cf-browser-verification')
+      ) {
+        return html
+      }
+    }
+    errors.push(`direct: HTTP ${res.status}`)
+  } catch (err) {
+    errors.push(
+      `direct: ${err instanceof Error ? err.message : 'failed'}`
+    )
+  }
+
+  throw new Error(
+    `All fetch strategies failed (${errors.join('; ')}). ` +
+      'Deploy the Cloudflare Worker from cloudflare-worker/ directory and set CF_WORKER_URL env var.'
+  )
+}
+
+/**
  * Fetch a Scribd document page using the z-ai page_reader function,
  * which uses a managed service that bypasses Cloudflare anti-bot protection.
  * Returns the raw HTML content of the page.
@@ -590,10 +700,10 @@ export async function fetchRealScribdDocInfo(
 
   let html: string
   try {
-    html = await fetchViaPageReader(url)
+    html = await fetchScribdHtml(url)
   } catch (err) {
     throw new Error(
-      `Unable to fetch the Scribd page. ${err instanceof Error ? err.message : 'Unknown error.'}`
+      `${err instanceof Error ? err.message : 'Unable to fetch the Scribd page.'}`
     )
   }
 

@@ -3,7 +3,7 @@ import { fetchRealScribdDocInfo, generateDemoDocInfo } from '@/lib/scribd'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   try {
@@ -31,73 +31,48 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ...demo, isDemo: true })
     }
 
-    // --- Strategy 1: z-ai page_reader (works in z.ai sandbox) ---
+    // --- REAL FETCH via fetchScribdHtml (tries CF Worker → z-ai → direct) ---
     try {
       const info = await fetchRealScribdDocInfo(url)
 
-      if (info.textContent && info.textContent.length > 100) {
+      // If we got real text content or page images, this is a successful fetch
+      if (
+        (info.textContent && info.textContent.length > 100) ||
+        (info.pageImages && info.pageImages.length > 0)
+      ) {
         return NextResponse.json({ ...info, warning: undefined })
       }
 
-      if (info.title && (info.pageImages?.length || 0) > 0) {
-        return NextResponse.json({ ...info, warning: undefined })
-      }
-
+      // If no content but we have metadata, return with a warning
       if (info.title) {
         return NextResponse.json({
           ...info,
           warning:
-            'Document metadata was retrieved, but no readable text content could be extracted. This document may be image-only or behind a paywall.',
+            'Document metadata was retrieved, but no readable text or page images could be extracted. This document may be behind a paywall.',
         })
       }
 
-      throw new Error('No usable content returned from the page reader.')
-    } catch (zaiErr) {
-      // z-ai SDK failed (expected on Vercel — internal API not reachable).
-      // Try the Edge Function fallback.
-      const zaiErrMsg =
-        zaiErr instanceof Error ? zaiErr.message : 'Unknown error'
+      throw new Error('No usable content returned.')
+    } catch (fetchErr) {
+      // Fall back to demo data with a helpful message
+      const demo = generateDemoDocInfo(url)
+      const errMsg =
+        fetchErr instanceof Error ? fetchErr.message : 'Unknown error'
 
-      // --- Strategy 2: Edge Function direct fetch (works on Vercel) ---
-      try {
-        const edgeRes = await fetch(
-          new URL('/api/scribd/edge-fetch', req.url).toString(),
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url }),
-          }
-        )
+      // Check if CF_WORKER_URL is configured and provide appropriate guidance
+      const hasWorker = !!process.env.CF_WORKER_URL
+      const guidance = hasWorker
+        ? `Live fetch failed (${errMsg}). Check that your Cloudflare Worker is deployed and accessible.`
+        : `Live fetch failed (${errMsg}). To enable real downloads on Vercel: deploy the Cloudflare Worker from the cloudflare-worker/ directory (npx wrangler deploy) and set the CF_WORKER_URL environment variable to the worker URL. See cloudflare-worker/README.md for instructions.`
 
-        if (edgeRes.ok) {
-          const edgeData = await edgeRes.json()
-          if (
-            edgeData &&
-            (edgeData.textContent || edgeData.pageImages?.length > 0)
-          ) {
-            return NextResponse.json({
-              ...edgeData,
-              warning: undefined,
-            })
-          }
-        }
-
-        // Edge fetch also failed — fall through to demo
-        throw new Error('Edge fetch returned no content')
-      } catch (edgeErr) {
-        // --- Strategy 3: Fall back to demo data ---
-        const edgeErrMsg =
-          edgeErr instanceof Error ? edgeErr.message : 'Unknown error'
-        const demo = generateDemoDocInfo(url)
-        return NextResponse.json(
-          {
-            ...demo,
-            isDemo: true,
-            warning: `Live fetch failed (z-ai: ${zaiErrMsg}; edge: ${edgeErrMsg}). Showing demo data. On Vercel Hobby, the 10s function timeout may prevent real fetches — consider upgrading to Pro or deploying on a platform without Cloudflare restrictions.`,
-          },
-          { status: 200 }
-        )
-      }
+      return NextResponse.json(
+        {
+          ...demo,
+          isDemo: true,
+          warning: guidance,
+        },
+        { status: 200 }
+      )
     }
   } catch (err) {
     const msg =
