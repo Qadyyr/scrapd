@@ -155,11 +155,19 @@ export default function Home() {
   const [showShortcuts, setShowShortcuts] = React.useState(false)
   const [showExtractModal, setShowExtractModal] = React.useState(false)
   const [extracting, setExtracting] = React.useState(false)
+  const [needsBrowserExtract, setNeedsBrowserExtract] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   // Load history on mount
   React.useEffect(() => {
     loadHistory()
+  }, [])
+
+  // Generate the bookmarklet href (runs in the user's browser on scribd.com)
+  const bookmarkletHref = React.useMemo(() => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    const code = `javascript:(function(){try{var h=document.documentElement.outerHTML;var m=h.match(/contentUrl:\\s*"(https:\\/\\/html\\.scribdassets\\.com\\/[^"]+\\.jsonp)"/g)||[];var u=m.map(function(x){return x.match(/"(https:\\/\\/[^"]+)"/)[1]});if(!u.length){alert('No Scribd pages found. Make sure you are on a Scribd document page.');return}var t=document.title.replace(/\\s*\\|\\s*Scribd.*$/i,'').trim();var th=(document.querySelector('meta[property="og:image"]')||{}).content||null;var pc=(h.match(/"page_count"\\s*:\\s*(\\d+)/)||[])[1]||u.length;var p=JSON.stringify({urls:u,title:t,sourceUrl:location.href,thumbnail:th,pageCount:parseInt(pc)});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract');x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success){alert('\\u2705 Extracted '+(r.pageImages||[]).length+' pages from "'+r.title+'"!\\n\\nReturn to the Scribd Downloader tab to download.');window.open('${origin}','_blank')}else{alert('\\u274c Error: '+(r.error||'unknown'))}}catch(e){alert('\\u274c Parse error: '+e.message)}};x.onerror=function(){alert('\\u274c Network error')};x.send(p)}catch(e){alert('\\u274c Error: '+e.message)}})()`
+    return code
   }, [])
 
   async function loadHistory() {
@@ -224,6 +232,7 @@ export default function Home() {
     setLoading(true)
     setError(null)
     setDocInfo(null)
+    setNeedsBrowserExtract(false)
     setDownloadProgress(0)
     setPageRange('')
 
@@ -239,6 +248,15 @@ export default function Home() {
         throw new Error(data.error || 'Failed to fetch document')
       }
 
+      // Check if server needs browser-based extraction (Cloudflare blocked)
+      if (data.needsBrowserExtract) {
+        setNeedsBrowserExtract(true)
+        setDocInfo(null)
+        setLoading(false)
+        return
+      }
+
+      setNeedsBrowserExtract(false)
       setDocInfo(data)
       if (data.isDemo) {
         toast.info('Showing demo data — live fetch was blocked', {
@@ -312,6 +330,7 @@ export default function Home() {
         throw new Error(result.error || 'Extraction failed')
       }
       setDocInfo(result)
+      setNeedsBrowserExtract(false)
       setShowExtractModal(false)
       toast.success(`Extracted "${result.title}" with ${result.pageImages?.length || 0} pages!`)
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -823,6 +842,130 @@ export default function Home() {
                     </Button>
                   </AlertDescription>
                 </Alert>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Browser Extract Panel — shows when server can't reach Scribd */}
+        <div className="container mx-auto max-w-3xl px-4">
+          <AnimatePresence>
+            {needsBrowserExtract && !loading && !docInfo && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                className="mt-6"
+              >
+                <Card className="border-primary/30 shadow-lg">
+                  <CardContent className="p-6">
+                    <div className="flex items-start gap-3 mb-5">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary shrink-0">
+                        <Zap className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="font-semibold text-lg mb-1">
+                          Your browser can access this document
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          Scribd blocks servers, but your browser passes automatically.
+                          Set up the extractor once — then it's just 2 clicks every time.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Bookmarklet install */}
+                    <div className="space-y-4">
+                      <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+                        <p className="text-sm font-medium flex items-center gap-2">
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">1</span>
+                          One-time setup: drag this button to your bookmarks bar
+                        </p>
+                        <div className="flex items-center gap-3 pl-7">
+                          <a
+                            href={bookmarkletHref}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              toast.info('📌 Drag this button to your bookmarks bar!')
+                            }}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground rounded-lg text-sm font-semibold cursor-grab hover:opacity-90 active:cursor-grabbing transition-opacity shadow-sm"
+                          >
+                            <Download className="h-4 w-4" />
+                            Extract Scribd
+                          </a>
+                          <span className="text-xs text-muted-foreground">
+                            (Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-background border rounded">Ctrl/Cmd+Shift+B</kbd> to show bookmarks bar)
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="bg-muted/50 rounded-lg p-4 space-y-2">
+                        <p className="text-sm font-medium flex items-center gap-2">
+                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">2</span>
+                          Open the Scribd page and click the bookmarklet
+                        </p>
+                        <div className="pl-7 flex items-center gap-3">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => window.open(url, '_blank')}
+                          >
+                            <Globe className="h-3.5 w-3.5" />
+                            Open Scribd page
+                          </Button>
+                          <span className="text-xs text-muted-foreground">
+                            → click "Extract Scribd" from your bookmarks bar
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                        <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          The bookmarklet extracts all page images and sends them here automatically.
+                          You'll see the download button appear on this page!
+                        </p>
+                      </div>
+
+                      {/* Paste HTML fallback (collapsible) */}
+                      <details className="text-sm">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors">
+                          No bookmarks bar? Click here to paste page source instead →
+                        </summary>
+                        <div className="mt-3 space-y-3">
+                          <p className="text-xs text-muted-foreground">
+                            Open the Scribd page → press Ctrl+U → Ctrl+A → Ctrl+C → paste below:
+                          </p>
+                          <textarea
+                            className="w-full h-32 p-3 text-xs font-mono rounded-md border border-border bg-background resize-y scrollbar-custom"
+                            placeholder="Paste the page source here..."
+                            id="paste-html-area"
+                          />
+                          <Button
+                            size="sm"
+                            className="gap-1.5"
+                            onClick={() => {
+                              const el = document.getElementById('paste-html-area') as HTMLTextAreaElement
+                              if (el?.value?.trim()) {
+                                handlePastedHtml(el.value, url)
+                              } else {
+                                toast.error('Paste the page source first')
+                              }
+                            }}
+                            disabled={extracting}
+                          >
+                            {extracting ? (
+                              <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Extracting...</>
+                            ) : (
+                              <><Zap className="h-3.5 w-3.5" /> Extract from pasted HTML</>
+                            )}
+                          </Button>
+                        </div>
+                      </details>
+                    </div>
+                  </CardContent>
+                </Card>
               </motion.div>
             )}
           </AnimatePresence>

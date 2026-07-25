@@ -54,22 +54,16 @@ export async function POST(req: NextRequest) {
 
       throw new Error('No usable content returned.')
     } catch (fetchErr) {
-      // Fall back to demo data with a helpful message
-      const demo = generateDemoDocInfo(url)
+      // Server-side fetch failed (Cloudflare blocked it).
+      // Return a clear status so the frontend can show the bookmarklet option.
       const errMsg =
         fetchErr instanceof Error ? fetchErr.message : 'Unknown error'
 
-      // Check if CF_WORKER_URL is configured and provide appropriate guidance
-      const hasWorker = !!process.env.CF_WORKER_URL
-      const guidance = hasWorker
-        ? `Live fetch failed (${errMsg}). Check that your Cloudflare Worker is deployed and accessible.`
-        : `Live fetch failed (${errMsg}). To enable real downloads on Vercel: deploy the Cloudflare Worker from the cloudflare-worker/ directory (npx wrangler deploy) and set the CF_WORKER_URL environment variable to the worker URL. See cloudflare-worker/README.md for instructions.`
-
       return NextResponse.json(
         {
-          ...demo,
-          isDemo: true,
-          warning: guidance,
+          needsBrowserExtract: true,
+          error: errMsg,
+          url,
         },
         { status: 200 }
       )
