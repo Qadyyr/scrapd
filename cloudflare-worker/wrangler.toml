@@ -3,3 +3,8 @@ main = "worker.js"
 compatibility_date = "2024-01-01"
 
 # Free plan: 100,000 requests/day
+# No secrets needed for direct fetch (Strategy 1)
+# For Cloudflare bypass (Strategy 2/3), add a scraping API key:
+#   wrangler secret put ZENROWS_API_KEY
+#   or
+#   wrangler secret put SCRAPINGBEE_API_KEY
