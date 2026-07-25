@@ -251,14 +251,12 @@ export default function Home() {
     }
   }, [])
 
-  // Generate the bookmarklet href — DEAD SIMPLE version
-  // 1. Grabs page HTML → sends to server (synchronous XHR)
-  // 2. Server stores result, returns an ID
-  // 3. Bookmarklet redirects to /?extract_id=ID
-  // 4. App loads, fetches stored data by ID, shows download buttons
+  // Generate the bookmarklet href — works on desktop AND mobile
+  // Uses ASYNC XHR (mobile browsers block synchronous XHR)
+  // Redirects via location.href in the onload callback (works in async, unlike window.open)
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',false);x.setRequestHeader('Content-Type','application/json');x.send(d);try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){location.href='${origin}/?extract_id='+r.extractId}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message+'\\n\\nResponse: '+x.responseText.substring(0,200))}}catch(e){alert('Error: '+e.message)}})())`
+    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});document.title='\\u23f3 Extracting...';var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',true);x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){location.href='${origin}/?extract_id='+r.extractId}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){alert('Network error. Please check your connection and try again.')};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
     return code
   }, [])
 
