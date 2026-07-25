@@ -15,13 +15,17 @@ export interface ScribdDocInfo {
   pageCount: number
   thumbnail: string | null
   pages: ScribdPage[]
-  sourceUrl: string
   /** Extracted text content of the document (for text-based PDF generation) */
   textContent?: string
   /** Whether the data is from the live site or a demo fallback */
   isDemo?: boolean
   /** Optional warning message */
   warning?: string
+  /** Per-page image URLs for scanned/image-based documents.
+   *  When present, an image-based PDF is generated instead of a text-based one. */
+  pageImages?: string[]
+  /** Whether the document is image-based (scanned) vs text-based */
+  isScanned?: boolean
 }
 
 const USER_AGENTS = [
@@ -609,12 +613,72 @@ export async function fetchRealScribdDocInfo(
     pageCount = parseInt(pageCountMeta[1], 10) || 0
   }
 
-  // --- Extract the actual document text content ---
-  const textContent = extractDocumentText(html)
+  // --- Extract per-page contentUrls from docManager.addPage() calls ---
+  // These JSONP files are hosted on html.scribdassets.com CDN and are
+  // directly accessible (no Cloudflare blocking). Each file contains
+  // either positioned text spans (text documents) or <img> tags (scanned
+  // documents).
+  const contentUrls: string[] = []
+  const contentUrlRegex = /contentUrl:\s*"(https:\/\/html\.scribdassets\.com\/[^"]+)"/g
+  let urlMatch
+  while ((urlMatch = contentUrlRegex.exec(html)) !== null) {
+    contentUrls.push(urlMatch[1])
+  }
 
-  // Build a "pages" array using the cover thumbnail so the preview still works.
+  let textContent = ''
+  let pageImages: string[] = []
+  let isScanned = false
+
+  if (contentUrls.length > 0) {
+    // Fetch each JSONP page directly from the CDN (no Cloudflare!)
+    const pageResults = await Promise.allSettled(
+      contentUrls.map((cu) => fetchJsonpContent(cu))
+    )
+
+    const pageTexts: string[] = []
+    const scannedImages: string[] = []
+
+    for (let i = 0; i < pageResults.length; i++) {
+      const result = pageResults[i]
+      if (result.status !== 'fulfilled' || !result.value) continue
+
+      const { text, imageUrl } = result.value
+      if (imageUrl) {
+        // This page is an image (scanned document)
+        scannedImages.push(imageUrl)
+      }
+      if (text) {
+        pageTexts.push(text)
+      }
+    }
+
+    if (scannedImages.length > 0) {
+      pageImages = scannedImages
+      isScanned = true
+    }
+
+    if (pageTexts.length > 0) {
+      textContent = pageTexts.join('\n\n---\n\n')
+    }
+
+    // Update pageCount to match actual pages found
+    if (contentUrls.length > pageCount) {
+      pageCount = contentUrls.length
+    }
+  }
+
+  // Fallback: if no JSONP pages were found, extract text from the main HTML
+  if (!textContent && !isScanned) {
+    textContent = extractDocumentText(html)
+  }
+
+  // Build a "pages" array: use page images for scanned docs, or thumbnail for text docs
   const pages: ScribdPage[] = []
-  if (thumbnail) {
+  if (isScanned && pageImages.length > 0) {
+    pageImages.forEach((imgUrl, i) => {
+      pages.push({ index: i, url: imgUrl })
+    })
+  } else if (thumbnail) {
     pages.push({ index: 0, url: thumbnail })
   }
 
@@ -630,6 +694,143 @@ export async function fetchRealScribdDocInfo(
     sourceUrl: url,
     textContent,
     isDemo: false,
+    pageImages: pageImages.length > 0 ? pageImages : undefined,
+    isScanned,
+  }
+}
+
+/**
+ * Fetch a single JSONP page content file from Scribd's CDN.
+ * Returns the extracted text (for text pages) and/or image URL (for scanned pages).
+ */
+async function fetchJsonpContent(
+  url: string
+): Promise<{ text: string; imageUrl: string | null } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': randomUA(),
+        Accept: '*/*',
+        Referer: 'https://www.scribd.com/',
+      },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!res.ok) return null
+
+    // The JSONP content may be gzipped; fetch handles decompression
+    const raw = await res.text()
+
+    // JSONP format: window.pageN_callback(["<html content>"])
+    // Extract the HTML content from inside the JSONP wrapper
+    const jsonpMatch = raw.match(/callback\(\s*\["(.*?)"\s*\]\s*\)/s)
+    let pageHtml = raw
+    if (jsonpMatch) {
+      // Unescape the JSON string
+      try {
+        pageHtml = JSON.parse('"' + jsonpMatch[1] + '"')
+      } catch {
+        pageHtml = jsonpMatch[1].replace(/\\"/g, '"').replace(/\\n/g, '\n')
+      }
+    }
+
+    // Check for image tags (scanned documents)
+    const $ = cheerio.load(pageHtml)
+
+    // Look for <img> tags with scribdassets URLs
+    let imageUrl: string | null = null
+    $('img').each((_, el) => {
+      const src = $(el).attr('src') || $(el).attr('data-src')
+      if (src && /scribdassets|scribd/i.test(src) && /\.(jpg|jpeg|png|webp)/i.test(src)) {
+        imageUrl = src
+        return false // break
+      }
+    })
+
+    // Also check for background-image CSS (some scanned pages use this)
+    if (!imageUrl) {
+      const bgMatch = pageHtml.match(
+        /background-image\s*:\s*url\(["']?(https:\/\/[^"')\s]+\.(?:jpg|jpeg|png|webp)[^"')\s]*)["']?\)/i
+      )
+      if (bgMatch) {
+        imageUrl = bgMatch[1]
+      }
+    }
+
+    // Also check for image URLs in style attributes
+    if (!imageUrl) {
+      $('[style*="background"]').each((_, el) => {
+        const style = $(el).attr('style') || ''
+        const bgUrl = style.match(
+          /url\(["']?(https:\/\/[^"')\s]+\.(?:jpg|jpeg|png|webp)[^"')\s]*)["']?\)/i
+        )
+        if (bgUrl) {
+          imageUrl = bgUrl[1]
+          return false
+        }
+      })
+    }
+
+    // Extract text content from the page
+    let text = ''
+    if (!imageUrl) {
+      // Text-based page: extract text from positioned spans
+      const spans = $('span.a').toArray()
+      if (spans.length > 0) {
+        const lines: { top: number; left: number; text: string }[] = []
+        for (const span of spans) {
+          const $span = $(span)
+          const style = $span.attr('style') || ''
+          const topMatch = style.match(/top:\s*(-?\d+(?:\.\d+)?)px/i)
+          const leftMatch = style.match(/left:\s*(-?\d+(?:\.\d+)?)px/i)
+          const spanText = $span.text().trim()
+          if (topMatch && leftMatch && spanText) {
+            lines.push({
+              top: parseFloat(topMatch[1]),
+              left: parseFloat(leftMatch[1]),
+              text: spanText,
+            })
+          }
+        }
+        // Sort by position and join
+        lines.sort((a, b) => a.top - b.top || a.left - b.left)
+        // Group into lines by top position
+        const lineGroups: { top: number; left: number; text: string }[][] = []
+        let currentGroup: { top: number; left: number; text: string }[] = []
+        let lastTop = -Infinity
+        const TOLERANCE = 40
+        for (const l of lines) {
+          if (l.top - lastTop > TOLERANCE && currentGroup.length > 0) {
+            lineGroups.push(currentGroup)
+            currentGroup = []
+          }
+          currentGroup.push(l)
+          lastTop = l.top
+        }
+        if (currentGroup.length > 0) lineGroups.push(currentGroup)
+
+        text = lineGroups
+          .map((group) =>
+            group
+              .sort((a, b) => a.left - b.left)
+              .map((s) => s.text)
+              .join(' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+          )
+          .filter((l) => l.length > 0)
+          .join('\n')
+      } else {
+        // Fallback: get all text
+        text = $.text()
+          .replace(/\u00a0/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      }
+    }
+
+    return { text, imageUrl }
+  } catch {
+    return null
   }
 }
 

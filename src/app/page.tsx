@@ -80,6 +80,8 @@ interface DocInfo {
   isDemo?: boolean
   warning?: string
   textContent?: string
+  pageImages?: string[]
+  isScanned?: boolean
 }
 
 interface HistoryItem {
@@ -318,7 +320,7 @@ export default function Home() {
   async function handleDownload(format: 'pdf' | 'zip' | 'txt') {
     if (!docInfo) return
     // Allow download if we have either page images OR text content
-    if (docInfo.pages.length === 0 && !docInfo.textContent) return
+    if (!docInfo.textContent && docInfo.pages.length === 0 && !docInfo.pageImages) return
 
     setDownloading(format)
     setDownloadProgress(0)
@@ -341,6 +343,8 @@ export default function Home() {
           sourceUrl: docInfo.sourceUrl,
           thumbnail: docInfo.thumbnail,
           textContent: docInfo.textContent,
+          pageImages: docInfo.pageImages,
+          isScanned: docInfo.isScanned,
           pageRange: pageRange.trim() || undefined,
         }),
       })
@@ -898,6 +902,12 @@ export default function Home() {
                             <FileText className="h-3 w-3" />
                             {docInfo.pageCount} pages
                           </Badge>
+                          {docInfo.isScanned && (
+                            <Badge className="gap-1 bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/15">
+                              <ImageIcon className="h-3 w-3" />
+                              Scanned (image-based)
+                            </Badge>
+                          )}
                           {docInfo.author && (
                             <Badge variant="outline">{docInfo.author}</Badge>
                           )}
@@ -940,7 +950,7 @@ export default function Home() {
                       <div className="mt-auto flex flex-wrap gap-2">
                         <Button
                           onClick={() => handleDownload('pdf')}
-                          disabled={downloading !== null || (docInfo.pages.length === 0 && !docInfo.textContent)}
+                          disabled={downloading !== null || (!docInfo.textContent && docInfo.pages.length === 0 && !docInfo.pageImages)}
                           className="gap-2"
                           size="lg"
                         >
@@ -958,7 +968,7 @@ export default function Home() {
                         </Button>
                         <Button
                           onClick={() => handleDownload('zip')}
-                          disabled={downloading !== null || (docInfo.pages.length === 0 && !docInfo.textContent)}
+                          disabled={downloading !== null || (!docInfo.textContent && docInfo.pages.length === 0 && !docInfo.pageImages)}
                           variant="outline"
                           className="gap-2"
                           size="lg"

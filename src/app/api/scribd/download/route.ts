@@ -380,11 +380,16 @@ async function generateTextPdf(params: {
 }
 
 /**
- * Generate an image-based PDF (legacy path, used when textContent is empty
- * but page image URLs are available).
+ * Generate an image-based PDF (for scanned documents). Each page is the
+ * actual scanned image — faithful to the original document.
  */
-async function generateImagePdf(pages: DownloadPage[]): Promise<Uint8Array> {
+async function generateImagePdf(
+  pages: DownloadPage[],
+  meta?: { title?: string; author?: string | null }
+): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
+  if (meta?.title) pdfDoc.setTitle(sanitizeForWinAnsi(meta.title))
+  if (meta?.author) pdfDoc.setAuthor(sanitizeForWinAnsi(meta.author))
   pdfDoc.setCreator('Scribd Downloader')
   pdfDoc.setProducer('Scribd Downloader')
 
@@ -439,6 +444,8 @@ export async function POST(req: NextRequest) {
       sourceUrl,
       thumbnail,
       textContent,
+      pageImages,
+      isScanned,
     }: {
       docId: string
       title: string
@@ -448,13 +455,27 @@ export async function POST(req: NextRequest) {
       sourceUrl: string
       thumbnail?: string | null
       textContent?: string
+      pageImages?: string[]
+      isScanned?: boolean
     } = body
 
     let pdfBytes: Uint8Array
     let isTextPdf = false
 
-    // Prefer text-based PDF when we have real text content
-    if (textContent && textContent.trim().length > 100) {
+    // For scanned/image-based documents, generate an image-based PDF
+    // (each page is the actual scanned image — faithful to the original)
+    if (pageImages && pageImages.length > 0) {
+      const imagePages: DownloadPage[] = pageImages.map((url, i) => ({
+        index: i,
+        url,
+      }))
+      pdfBytes = await generateImagePdf(imagePages, {
+        title: title || 'Scribd Document',
+        author: author || null,
+      })
+      isTextPdf = false
+    } else if (textContent && textContent.trim().length > 100) {
+      // For text-based documents, generate a searchable text PDF
       pdfBytes = await generateTextPdf({
         title: title || 'Scribd Document',
         author: author || null,
@@ -464,7 +485,10 @@ export async function POST(req: NextRequest) {
       })
       isTextPdf = true
     } else if (pages && pages.length > 0) {
-      pdfBytes = await generateImagePdf(pages)
+      pdfBytes = await generateImagePdf(pages, {
+        title: title || 'Scribd Document',
+        author: author || null,
+      })
     } else {
       return NextResponse.json(
         { error: 'No content available for PDF generation.' },
