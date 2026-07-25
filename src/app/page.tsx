@@ -873,6 +873,35 @@ export default function Home() {
               </span>
             </motion.div>
 
+            {/* Quick Download via Bookmarklet — the fastest way */}
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.35 }}
+              className="mt-6 mx-auto max-w-xl"
+            >
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-left">
+                <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                  <Zap className="h-4 w-4 text-primary" />
+                  Fastest method — no URL needed!
+                </p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Drag this button to your bookmarks bar. Then on any Scribd page,
+                  just click it — you'll be redirected here with the download ready.
+                </p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span
+                    dangerouslySetInnerHTML={{
+                      __html: `<a href="${bookmarkletHref}" class="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-semibold cursor-grab hover:opacity-90 active:cursor-grabbing transition-opacity shadow-sm"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Extract Scribd</a>`,
+                    }}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    ← drag to bookmarks bar
+                  </span>
+                </div>
+              </div>
+            </motion.div>
+
             {/* Demo + Shortcuts buttons */}
             <motion.div
               initial={{ opacity: 0 }}
