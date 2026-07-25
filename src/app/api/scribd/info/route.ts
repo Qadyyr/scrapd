@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { fetchScribdDocInfo, generateDemoDocInfo } from '@/lib/scribd'
+import { fetchRealScribdDocInfo, generateDemoDocInfo } from '@/lib/scribd'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   try {
@@ -30,24 +31,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ...demo, isDemo: true })
     }
 
+    // --- REAL FETCH via z-ai page_reader (bypasses Cloudflare) ---
     try {
-      const info = await fetchScribdDocInfo(url)
+      const info = await fetchRealScribdDocInfo(url)
 
-      if (info.pages.length === 0) {
-        return NextResponse.json(
-          {
-            ...info,
-            warning:
-              'No page images could be extracted. This document may be behind a paywall, require login, or use protected rendering that prevents image extraction.',
-          },
-          { status: 200 }
-        )
+      // If we got real text content, this is a successful live fetch.
+      if (info.textContent && info.textContent.length > 100) {
+        return NextResponse.json({
+          ...info,
+          warning: undefined,
+        })
       }
 
-      return NextResponse.json(info)
+      // If no text content but we have metadata, return with a warning
+      if (info.title) {
+        return NextResponse.json({
+          ...info,
+          warning:
+            'Document metadata was retrieved, but no readable text content could be extracted. This document may be image-only or behind a paywall. Download will produce a minimal PDF.',
+        })
+      }
+
+      throw new Error('No usable content returned from the page reader.')
     } catch (fetchErr) {
-      // If the real fetch fails (e.g. Cloudflare blocking), fall back to demo data
-      // so the user can still experience the UI flow.
+      // Last-resort fallback to demo data
       const demo = generateDemoDocInfo(url)
       const errMsg =
         fetchErr instanceof Error ? fetchErr.message : 'Unknown error'
@@ -55,13 +62,14 @@ export async function POST(req: NextRequest) {
         {
           ...demo,
           isDemo: true,
-          warning: `Live fetch failed (${errMsg}). Showing demo data with placeholder images so you can preview the download flow.`,
+          warning: `Live fetch failed (${errMsg}). Showing demo data with placeholder content so you can preview the download flow.`,
         },
         { status: 200 }
       )
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Failed to fetch document info.'
+    const msg =
+      err instanceof Error ? err.message : 'Failed to fetch document info.'
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }

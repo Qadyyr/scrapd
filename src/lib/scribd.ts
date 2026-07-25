@@ -16,6 +16,12 @@ export interface ScribdDocInfo {
   thumbnail: string | null
   pages: ScribdPage[]
   sourceUrl: string
+  /** Extracted text content of the document (for text-based PDF generation) */
+  textContent?: string
+  /** Whether the data is from the live site or a demo fallback */
+  isDemo?: boolean
+  /** Optional warning message */
+  warning?: string
 }
 
 const USER_AGENTS = [
@@ -315,24 +321,6 @@ export async function fetchScribdDocInfo(rawUrl: string): Promise<ScribdDocInfo>
 }
 
 /**
- * Fetch an image as an ArrayBuffer.
- */
-export async function fetchImageBuffer(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent': randomUA(),
-      Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-      Referer: 'https://www.scribd.com/',
-    },
-    signal: AbortSignal.timeout(30000),
-  })
-  if (!res.ok) {
-    throw new Error(`Failed to fetch image (HTTP ${res.status})`)
-  }
-  return res.arrayBuffer()
-}
-
-/**
  * Generate demo document info with placeholder page images.
  * Used when Scribd blocks the request, so users can still experience the UI.
  */
@@ -356,5 +344,258 @@ export function generateDemoDocInfo(rawUrl: string): ScribdDocInfo {
     sourceUrl: rawUrl.includes('scribd.com')
       ? rawUrl
       : `https://www.scribd.com/document/${docId}/demo`,
+    isDemo: true,
   }
+}
+
+// =========================================================================
+// REAL FETCHING via z-ai-web-dev-sdk page_reader (bypasses Cloudflare)
+// =========================================================================
+
+interface PageReaderClient {
+  functions: {
+    invoke: (
+      name: string,
+      args: Record<string, unknown>
+    ) => Promise<{ data?: { html?: string; title?: string; text?: string } }>
+  }
+}
+
+/**
+ * Fetch a Scribd document page using the z-ai page_reader function,
+ * which uses a managed service that bypasses Cloudflare anti-bot protection.
+ * Returns the raw HTML content of the page.
+ */
+async function fetchViaPageReader(url: string): Promise<string> {
+  const ZAIModule = await import('z-ai-web-dev-sdk')
+  const ZAI = (
+    ZAIModule as unknown as {
+      default: { create: () => Promise<PageReaderClient> }
+    }
+  ).default
+  const client = await ZAI.create()
+
+  const result = await client.functions.invoke('page_reader', { url })
+  const html: string = result?.data?.html || ''
+  if (!html || html.length < 200) {
+    throw new Error('page_reader returned empty content')
+  }
+  return html
+}
+
+/**
+ * Clean and extract the actual document text from a Scribd page's HTML.
+ * Removes navigation, scripts, styles, cookie banners, and boilerplate,
+ * keeping the readable document content.
+ */
+function extractDocumentText(html: string): string {
+  const $ = cheerio.load(html)
+
+  // Remove non-content elements
+  $(
+    'script, style, noscript, nav, header, footer, iframe, svg, ' +
+      '[class*="cookie"], [class*="Cookie"], [id*="cookie"], ' +
+      '[class*="banner"], [class*="Banner"], ' +
+      '[class*="modal"], [class*="Modal"], ' +
+      '[class*="signup"], [class*="Signup"], ' +
+      '[class*="login"], [class*="Login"], ' +
+      '[class*="nav"], [class*="Nav"], ' +
+      '[class*="menu"], [class*="Menu"], ' +
+      '[class*="sidebar"], [class*="Sidebar"], ' +
+      '[class*="recommend"], [class*="Recommend"], ' +
+      '[class*="related"], [class*="Related"], ' +
+      '[class*="suggest"], [class*="Suggest"], ' +
+      '[class*="footer"], [class*="Footer"], ' +
+      '[class*="header"], [class*="Header"]'
+  ).remove()
+
+  let bodyText = $('body').text()
+
+  // Normalize whitespace
+  bodyText = bodyText
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .join('\n')
+
+  // Remove obvious boilerplate phrases
+  const boilerplate = [
+    /^Opens in a new window/i,
+    /^Opens an external website/i,
+    /^Close this dialog/i,
+    /^Skip to main content/i,
+    /^Open navigation menu/i,
+    /^Close suggestions/i,
+    /^Change Language/i,
+    /^Sign in$/i,
+    /^Download free for 30 days/i,
+    /^Download$/i,
+    /^Save$/i,
+    /^Print$/i,
+    /^Embed$/i,
+    /^Report$/i,
+    /^Share$/i,
+    /^Upload$/i,
+    /^Search$/i,
+    /^Your Privacy Choices/i,
+    /^Cookie Preferences/i,
+    /^Go to previous items/i,
+    /^Go to next items/i,
+    /^You are on page/i,
+    /^AI-enhanced title/i,
+    /^Full description/i,
+    /^Mark this document as/i,
+    /^found this document/i,
+    /^For Later/i,
+    /^ratings?$/i,
+    /^\d+ ratings?$/i,
+    /^\d+ views?$/i,
+    /^\d+ pages?$/i,
+  ]
+
+  bodyText = bodyText
+    .split('\n')
+    .filter((line) => !boilerplate.some((re) => re.test(line)))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  // Cut everything before the "You are on page N" marker — that's where the
+  // actual document body content begins on Scribd pages.
+  const pageMarker = bodyText.match(/You are on page\s*\d+\s*\d*/i)
+  if (pageMarker && pageMarker.index !== undefined) {
+    bodyText = bodyText.slice(pageMarker.index + pageMarker[0].length).trim()
+  }
+
+  return bodyText
+}
+
+/**
+ * Fetch REAL Scribd document info using the z-ai page_reader service.
+ * This bypasses Cloudflare and returns actual document metadata + text content.
+ *
+ * Since Scribd's per-page image hashes are JS-generated and not directly
+ * accessible, we extract the document's text content and use the cover image
+ * as the thumbnail. A text-based PDF can then be generated from the content.
+ */
+export async function fetchRealScribdDocInfo(
+  rawUrl: string
+): Promise<ScribdDocInfo> {
+  const url = normalizeScribdUrl(rawUrl)
+  if (!url) {
+    throw new Error('Invalid URL. Please enter a valid Scribd document URL.')
+  }
+
+  const docId = extractDocId(url)
+  if (!docId) {
+    throw new Error('Could not find a document ID in the URL.')
+  }
+
+  let html: string
+  try {
+    html = await fetchViaPageReader(url)
+  } catch (err) {
+    throw new Error(
+      `Unable to fetch the Scribd page. ${err instanceof Error ? err.message : 'Unknown error.'}`
+    )
+  }
+
+  const $ = cheerio.load(html)
+
+  // --- Extract real metadata ---
+  const rawTitle =
+    $('meta[property="og:title"]').attr('content') ||
+    $('title').text().trim() ||
+    `Scribd Document ${docId}`
+
+  // Strip common Scribd SEO suffixes like "| PDF | Wife | Marriage"
+  const title = rawTitle
+    .replace(/\s*\|\s*Scribd.*$/i, '')
+    .replace(/\s*\|\s*PDF.*$/i, '')
+    .replace(/\s*\|\s*[A-Z][^|]{0,40}(\s*\|\s*[^|]{0,40})*$/i, '')
+    .trim()
+
+  const description =
+    $('meta[property="og:description"]').attr('content') ||
+    $('meta[name="description"]').attr('content') ||
+    null
+
+  const thumbnail =
+    $('meta[property="og:image"]').attr('content') ||
+    $('link[rel="image_src"]').attr('href') ||
+    null
+
+  let author: string | null =
+    $('meta[property="article:author"]').attr('content') ||
+    $('meta[name="author"]').attr('content') ||
+    null
+  if (!author) {
+    // Look for "Uploaded by" in text content, clean any HTML artifacts
+    const uploadedByText = html.match(
+      /Uploaded by\s+([^<\n"<>]{2,60})/i
+    )
+    if (uploadedByText) author = uploadedByText[1].trim()
+  }
+  // Clean any residual HTML/quote artifacts from author
+  if (author) {
+    author = author
+      .replace(/["'<>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 80)
+  }
+
+  let pageCount = 0
+  const pageCountMeta =
+    html.match(/"page_count"\s*:\s*(\d+)/) ||
+    html.match(/"pageCount"\s*:\s*(\d+)/) ||
+    html.match(/(\d+)\s+pages/i)
+  if (pageCountMeta) {
+    pageCount = parseInt(pageCountMeta[1], 10) || 0
+  }
+
+  // --- Extract the actual document text content ---
+  const textContent = extractDocumentText(html)
+
+  // Build a "pages" array using the cover thumbnail so the preview still works.
+  const pages: ScribdPage[] = []
+  if (thumbnail) {
+    pages.push({ index: 0, url: thumbnail })
+  }
+
+  return {
+    docId,
+    title: title.replace(/\s*\|\s*Scribd.*$/i, '').trim(),
+    author: author?.trim() || null,
+    description: description?.trim() || null,
+    pageCount:
+      pageCount || (textContent ? Math.ceil(textContent.length / 2500) : 1),
+    thumbnail,
+    pages,
+    sourceUrl: url,
+    textContent,
+    isDemo: false,
+  }
+}
+
+/**
+ * Fetch an image as an ArrayBuffer (for thumbnail/cover images).
+ */
+export async function fetchImageBuffer(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': randomUA(),
+      Accept:
+        'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      Referer: 'https://www.scribd.com/',
+    },
+    signal: AbortSignal.timeout(30000),
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to fetch image (HTTP ${res.status})`)
+  }
+  return res.arrayBuffer()
 }

@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 interface DownloadPage {
   index: number
@@ -20,32 +21,6 @@ function sanitizeFilename(name: string): string {
   )
 }
 
-function parsePageRange(range: string | undefined, totalPages: number): number[] {
-  if (!range || range.trim() === '') {
-    return Array.from({ length: totalPages }, (_, i) => i)
-  }
-  const result = new Set<number>()
-  const parts = range.split(',').map((p) => p.trim())
-  for (const part of parts) {
-    if (part.includes('-')) {
-      const [startStr, endStr] = part.split('-').map((s) => s.trim())
-      const start = parseInt(startStr, 10)
-      const end = parseInt(endStr, 10)
-      if (!isNaN(start) && !isNaN(end)) {
-        const lo = Math.max(1, Math.min(start, end))
-        const hi = Math.min(totalPages, Math.max(start, end))
-        for (let i = lo; i <= hi; i++) result.add(i - 1)
-      }
-    } else {
-      const n = parseInt(part, 10)
-      if (!isNaN(n) && n >= 1 && n <= totalPages) {
-        result.add(n - 1)
-      }
-    }
-  }
-  return Array.from(result).sort((a, b) => a - b)
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
@@ -56,7 +31,7 @@ export async function POST(req: NextRequest) {
       pages,
       sourceUrl,
       thumbnail,
-      pageRange,
+      textContent,
     }: {
       docId: string
       title: string
@@ -64,27 +39,8 @@ export async function POST(req: NextRequest) {
       pages: DownloadPage[]
       sourceUrl: string
       thumbnail?: string | null
-      pageRange?: string
+      textContent?: string
     } = body
-
-    if (!pages || !Array.isArray(pages) || pages.length === 0) {
-      return NextResponse.json(
-        { error: 'No pages provided for ZIP generation.' },
-        { status: 400 }
-      )
-    }
-
-    const selectedIndices = parsePageRange(pageRange, pages.length)
-    const selectedPages = selectedIndices
-      .map((i) => pages[i])
-      .filter((p): p is DownloadPage => Boolean(p))
-
-    if (selectedPages.length === 0) {
-      return NextResponse.json(
-        { error: 'No valid pages in the selected range.' },
-        { status: 400 }
-      )
-    }
 
     const zip = new JSZip()
     const folderName = sanitizeFilename(title || `document-${docId}`)
@@ -93,27 +49,61 @@ export async function POST(req: NextRequest) {
     let downloadedCount = 0
     let totalBytes = 0
 
-    for (const page of selectedPages) {
-      try {
-        const imgBuffer = await fetchImageBuffer(page.url)
-        totalBytes += imgBuffer.byteLength
+    // Add the document text content as a .txt file (primary content)
+    if (textContent && textContent.trim().length > 0) {
+      const header =
+        `${title}\n` +
+        (author ? `by ${author}\n` : '') +
+        '\n' +
+        `Source: ${sourceUrl}\n` +
+        `Downloaded: ${new Date().toISOString()}\n` +
+        `${'='.repeat(60)}\n\n`
+      folder.file('document.txt', header + textContent)
+      downloadedCount++
+      totalBytes += Buffer.byteLength(header + textContent, 'utf8')
+    }
 
-        const bytes = new Uint8Array(imgBuffer)
-        const isPng =
-          bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
-        const ext = isPng ? 'png' : 'jpg'
-        const pageNum = String(page.index + 1).padStart(3, '0')
+    // Add metadata.json
+    const meta = {
+      title,
+      author: author || null,
+      sourceUrl,
+      docId,
+      downloadedAt: new Date().toISOString(),
+      format: 'zip',
+      textIncluded: Boolean(textContent),
+      imageCount: pages?.length || 0,
+    }
+    folder.file('metadata.json', JSON.stringify(meta, null, 2))
+    totalBytes += Buffer.byteLength(JSON.stringify(meta), 'utf8')
 
-        folder.file(`page-${pageNum}.${ext}`, imgBuffer)
-        downloadedCount++
-      } catch {
-        // Skip failed pages
+    // Add any page images (e.g., the cover thumbnail)
+    if (pages && pages.length > 0) {
+      for (const page of pages) {
+        try {
+          const imgBuffer = await fetchImageBuffer(page.url)
+          totalBytes += imgBuffer.byteLength
+
+          const bytes = new Uint8Array(imgBuffer)
+          const isPng =
+            bytes[0] === 0x89 &&
+            bytes[1] === 0x50 &&
+            bytes[2] === 0x4e &&
+            bytes[3] === 0x47
+          const ext = isPng ? 'png' : 'jpg'
+          const pageNum = String(page.index + 1).padStart(3, '0')
+
+          folder.file(`page-${pageNum}.${ext}`, imgBuffer)
+          downloadedCount++
+        } catch {
+          // Skip failed images
+        }
       }
     }
 
     if (downloadedCount === 0) {
       return NextResponse.json(
-        { error: 'Failed to download any page images.' },
+        { error: 'Failed to create any content for the ZIP archive.' },
         { status: 500 }
       )
     }

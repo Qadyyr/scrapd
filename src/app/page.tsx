@@ -31,6 +31,7 @@ import {
   Keyboard,
   ListChecks,
   Package,
+  CheckCircle2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -78,6 +79,7 @@ interface DocInfo {
   sourceUrl: string
   isDemo?: boolean
   warning?: string
+  textContent?: string
 }
 
 interface HistoryItem {
@@ -314,7 +316,9 @@ export default function Home() {
   }
 
   async function handleDownload(format: 'pdf' | 'zip') {
-    if (!docInfo || docInfo.pages.length === 0) return
+    if (!docInfo) return
+    // Allow download if we have either page images OR text content
+    if (docInfo.pages.length === 0 && !docInfo.textContent) return
 
     setDownloading(format)
     setDownloadProgress(0)
@@ -328,9 +332,11 @@ export default function Home() {
           docId: docInfo.docId,
           title: docInfo.title,
           author: docInfo.author,
+          description: docInfo.description,
           pages: docInfo.pages,
           sourceUrl: docInfo.sourceUrl,
           thumbnail: docInfo.thumbnail,
+          textContent: docInfo.textContent,
           pageRange: pageRange.trim() || undefined,
         }),
       })
@@ -921,7 +927,7 @@ export default function Home() {
                       <div className="mt-auto flex flex-wrap gap-2">
                         <Button
                           onClick={() => handleDownload('pdf')}
-                          disabled={downloading !== null || docInfo.pages.length === 0}
+                          disabled={downloading !== null || (docInfo.pages.length === 0 && !docInfo.textContent)}
                           className="gap-2"
                           size="lg"
                         >
@@ -939,7 +945,7 @@ export default function Home() {
                         </Button>
                         <Button
                           onClick={() => handleDownload('zip')}
-                          disabled={downloading !== null || docInfo.pages.length === 0}
+                          disabled={downloading !== null || (docInfo.pages.length === 0 && !docInfo.textContent)}
                           variant="outline"
                           className="gap-2"
                           size="lg"
@@ -997,6 +1003,49 @@ export default function Home() {
                     </div>
                   </div>
                 </Card>
+
+                {/* Document Text Content Preview (real content) */}
+                {docInfo.textContent && docInfo.textContent.trim().length > 0 && (
+                  <Card className="border-border/60 overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-3 border-b border-border/60 bg-muted/30">
+                      <h3 className="text-sm font-semibold flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-primary" />
+                        Document Content
+                        <Badge variant="secondary" className="text-[10px]">
+                          {docInfo.textContent.length.toLocaleString()} chars
+                        </Badge>
+                        {!docInfo.isDemo && (
+                          <Badge className="gap-1 text-[10px] bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15">
+                            <CheckCircle2 className="h-2.5 w-2.5" />
+                            Live content
+                          </Badge>
+                        )}
+                      </h3>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs gap-1"
+                        onClick={() => {
+                          navigator.clipboard.writeText(docInfo.textContent || '')
+                          toast.success('Content copied to clipboard')
+                        }}
+                      >
+                        <Copy className="h-3 w-3" />
+                        Copy
+                      </Button>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto scrollbar-custom p-5">
+                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-foreground/90">
+                        {docInfo.textContent.slice(0, 8000)}
+                        {docInfo.textContent.length > 8000 && (
+                          <span className="text-muted-foreground italic">
+                            {'\n\n…'} ({(docInfo.textContent.length - 8000).toLocaleString()} more characters — download the full PDF to read everything)
+                          </span>
+                        )}
+                      </pre>
+                    </div>
+                  </Card>
+                )}
 
                 {/* Page Preview Grid */}
                 {docInfo.pages.length > 0 && (
