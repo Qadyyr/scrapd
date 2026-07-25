@@ -1,0 +1,360 @@
+import * as cheerio from 'cheerio'
+
+export interface ScribdPage {
+  index: number
+  url: string
+  width?: number
+  height?: number
+}
+
+export interface ScribdDocInfo {
+  docId: string
+  title: string
+  author: string | null
+  description: string | null
+  pageCount: number
+  thumbnail: string | null
+  pages: ScribdPage[]
+  sourceUrl: string
+}
+
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+]
+
+function randomUA(): string {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
+}
+
+/**
+ * Extract the Scribd document ID from a URL.
+ * URLs look like: https://www.scribd.com/document/123456789/title-slug
+ */
+export function extractDocId(url: string): string | null {
+  const match = url.match(/scribd\.com\/(?:doc|document|read|embeds)\/(\d+)/i)
+  return match ? match[1] : null
+}
+
+/**
+ * Validate and normalize a Scribd URL.
+ */
+export function normalizeScribdUrl(url: string): string | null {
+  const trimmed = url.trim()
+  if (!trimmed.includes('scribd.com')) return null
+  // Ensure it has a protocol
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `https://${trimmed}`
+  }
+  return trimmed
+}
+
+/**
+ * Fetch HTML content from a URL with browser-like headers.
+ */
+async function fetchHtml(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': randomUA(),
+      Accept:
+        'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Ch-Ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"',
+    },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(20000),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch page (HTTP ${res.status})`)
+  }
+
+  return res.text()
+}
+
+/**
+ * Try multiple URL variants to fetch the Scribd document HTML.
+ * Scribd may block some endpoints but allow others.
+ */
+async function fetchScribdHtml(docId: string, originalUrl: string): Promise<string> {
+  const urlsToTry = [
+    originalUrl,
+    `https://www.scribd.com/document/${docId}`,
+    `https://www.scribd.com/doc/${docId}`,
+    `https://www.scribd.com/embeds/${docId}/content`,
+    `https://www.scribd.com/mobile/documents/${docId}`,
+  ]
+
+  let lastError: Error | null = null
+  for (const u of urlsToTry) {
+    try {
+      const html = await fetchHtml(u)
+      if (html && html.length > 500) {
+        return html
+      }
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err))
+    }
+  }
+  throw lastError || new Error('All fetch attempts failed')
+}
+
+/**
+ * Deduplicate an array of strings while preserving order.
+ */
+function dedupe(arr: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of arr) {
+    if (item && !seen.has(item)) {
+      seen.add(item)
+      result.push(item)
+    }
+  }
+  return result
+}
+
+/**
+ * Try to parse a JSON object from a script tag's content.
+ */
+function tryParseJson(content: string): any | null {
+  try {
+    return JSON.parse(content)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Recursively search a nested object for image URLs matching Scribd CDN patterns.
+ */
+function findImageUrls(obj: any, found: string[]): void {
+  if (!obj || typeof obj !== 'object') return
+  if (Array.isArray(obj)) {
+    for (const item of obj) findImageUrls(item, found)
+    return
+  }
+  for (const [key, val] of Object.entries(obj)) {
+    if (typeof val === 'string') {
+      if (
+        (key === 'url' || key === 'src' || key === 'image_url' || key === 'imageUrl') &&
+        /scribd|scribdassets|document_cloud/i.test(val) &&
+        /\.(jpg|jpeg|png|webp)/i.test(val)
+      ) {
+        found.push(val)
+      }
+    } else if (typeof val === 'object') {
+      findImageUrls(val, found)
+    }
+  }
+}
+
+/**
+ * Main function: fetch a Scribd document page and extract its info + page images.
+ */
+export async function fetchScribdDocInfo(rawUrl: string): Promise<ScribdDocInfo> {
+  const url = normalizeScribdUrl(rawUrl)
+  if (!url) {
+    throw new Error('Invalid URL. Please enter a valid Scribd document URL.')
+  }
+
+  const docId = extractDocId(url)
+  if (!docId) {
+    throw new Error('Could not find a document ID in the URL.')
+  }
+
+  let html: string
+  try {
+    html = await fetchScribdHtml(docId, url)
+  } catch (err) {
+    throw new Error(
+      `Unable to reach Scribd — the site may be blocking automated requests (Cloudflare protection). ${err instanceof Error ? err.message : 'Network error.'} Try again later or try a different document URL.`
+    )
+  }
+
+  const $ = cheerio.load(html)
+
+  // --- Extract metadata from meta tags ---
+  const title =
+    $('meta[property="og:title"]').attr('content') ||
+    $('meta[name="twitter:title"]').attr('content') ||
+    $('title').text().trim() ||
+    `Scribd Document ${docId}`
+
+  const description =
+    $('meta[property="og:description"]').attr('content') ||
+    $('meta[name="description"]').attr('content') ||
+    null
+
+  const thumbnail =
+    $('meta[property="og:image"]').attr('content') ||
+    $('meta[name="twitter:image"]').attr('content') ||
+    null
+
+  const author =
+    $('meta[property="article:author"]').attr('content') ||
+    $('meta[name="author"]').attr('content') ||
+    $('a[data-testid="author_link"]').text().trim() ||
+    null
+
+  // --- Extract page images ---
+  const pageUrls: string[] = []
+
+  // Strategy 1: Find <img> tags with class "absimg" (Scribd's rendered page images)
+  $('img.absimg').each((_, el) => {
+    const src = $(el).attr('data-src') || $(el).attr('src')
+    if (src) pageUrls.push(src)
+  })
+
+  // Strategy 2: Find images in the document viewer area
+  $('[class*="page"], [class*="Page"], [data-page]').each((_, el) => {
+    const $el = $(el)
+    const src = $el.attr('data-src') || $el.attr('src')
+    if (src && /\.(jpg|jpeg|png|webp)/i.test(src)) pageUrls.push(src)
+    $el.find('img').each((_, img) => {
+      const imgSrc = $(img).attr('data-src') || $(img).attr('src')
+      if (imgSrc && /\.(jpg|jpeg|png|webp)/i.test(imgSrc)) pageUrls.push(imgSrc)
+    })
+  })
+
+  // Strategy 3: Search script tags for JSON containing image URLs
+  $('script').each((_, el) => {
+    const content = $(el).html() || ''
+    // Look for JSON objects that might contain page data
+    if (content.includes('scribd') || content.includes('page')) {
+      // Try to find JSON in __NEXT_DATA__ or similar
+      const nextDataMatch = content.match(
+        /(?:__NEXT_DATA__|__INITIAL_STATE__|window\.__[A-Z_]+__)\s*=\s*({[\s\S]*?})\s*;?\s*(?:<\/script>|$)/
+      )
+      if (nextDataMatch) {
+        const parsed = tryParseJson(nextDataMatch[1])
+        if (parsed) findImageUrls(parsed, pageUrls)
+      }
+
+      // Also extract any URLs that look like Scribd page images
+      const urlMatches = content.matchAll(
+        /["'](https?:\/\/[^"']*(?:scribd|scribdassets|document_cloud)[^"']*\.(?:jpg|jpeg|png|webp)[^"']*)["']/gi
+      )
+      for (const m of urlMatches) {
+        pageUrls.push(m[1])
+      }
+    }
+  })
+
+  // Strategy 4: Find any image URLs that match Scribd CDN patterns
+  $('img').each((_, el) => {
+    const src = $(el).attr('src') || ''
+    if (/scribd|scribdassets|document_cloud/i.test(src) && /\.(jpg|jpeg|png|webp)/i.test(src)) {
+      pageUrls.push(src)
+    }
+  })
+
+  // Deduplicate and filter
+  const uniqueUrls = dedupe(pageUrls)
+
+  // Sort by page number if possible (look for /pages/N/ in URL)
+  uniqueUrls.sort((a, b) => {
+    const pageA = a.match(/\/pages\/(\d+)/)
+    const pageB = b.match(/\/pages\/(\d+)/)
+    if (pageA && pageB) return parseInt(pageA[1]) - parseInt(pageB[1])
+    return 0
+  })
+
+  // Try to determine actual page count from meta or JSON
+  let pageCount = uniqueUrls.length
+  const pageCountMeta =
+    $('meta[property="scribd:page_count"]').attr('content') ||
+    $('meta[name="scribd:page_count"]').attr('content')
+  if (pageCountMeta) {
+    const n = parseInt(pageCountMeta, 10)
+    if (!isNaN(n) && n > pageCount) pageCount = n
+  }
+
+  // If no images found, try the thumbnail at least
+  if (uniqueUrls.length === 0 && thumbnail) {
+    // We have metadata but no pages — likely behind a paywall
+    return {
+      docId,
+      title: title.replace(/\s*\|\s*Scribd.*$/i, '').trim(),
+      author: author?.trim() || null,
+      description: description?.trim() || null,
+      pageCount: pageCount || 0,
+      thumbnail,
+      pages: [],
+      sourceUrl: url,
+    }
+  }
+
+  // Build the pages array
+  const pages: ScribdPage[] = uniqueUrls.map((u, i) => ({
+    index: i,
+    url: u,
+  }))
+
+  return {
+    docId,
+    title: title.replace(/\s*\|\s*Scribd.*$/i, '').trim(),
+    author: author?.trim() || null,
+    description: description?.trim() || null,
+    pageCount: pageCount || pages.length,
+    thumbnail,
+    pages,
+    sourceUrl: url,
+  }
+}
+
+/**
+ * Fetch an image as an ArrayBuffer.
+ */
+export async function fetchImageBuffer(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url, {
+    headers: {
+      'User-Agent': randomUA(),
+      Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      Referer: 'https://www.scribd.com/',
+    },
+    signal: AbortSignal.timeout(30000),
+  })
+  if (!res.ok) {
+    throw new Error(`Failed to fetch image (HTTP ${res.status})`)
+  }
+  return res.arrayBuffer()
+}
+
+/**
+ * Generate demo document info with placeholder page images.
+ * Used when Scribd blocks the request, so users can still experience the UI.
+ */
+export function generateDemoDocInfo(rawUrl: string): ScribdDocInfo {
+  const docId = extractDocId(rawUrl) || 'demo-12345'
+  const pageCount = 8
+  const pages: ScribdPage[] = Array.from({ length: pageCount }, (_, i) => ({
+    index: i,
+    url: `https://picsum.photos/seed/scribd-demo-${docId}-${i}/850/1100`,
+  }))
+
+  return {
+    docId,
+    title: 'Sample Document — Demo Preview',
+    author: 'Scribd Downloader',
+    description:
+      'This is demo data shown because Scribd blocked the live request (Cloudflare protection). The page images are placeholders so you can preview how the downloader works. Try the download button to generate a sample PDF.',
+    pageCount,
+    thumbnail: pages[0]?.url || null,
+    pages,
+    sourceUrl: rawUrl.includes('scribd.com')
+      ? rawUrl
+      : `https://www.scribd.com/document/${docId}/demo`,
+  }
+}
