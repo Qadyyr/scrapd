@@ -163,22 +163,42 @@ export default function Home() {
     loadHistory()
 
     // Check if we're returning from a bookmarklet extraction
-    const urlParams = new URLSearchParams(window.location.search)
-    const fromBookmarklet = urlParams.get('from_bookmarklet')
-
-    // Check for extracted data from the bookmarklet (via window.name or URL hash)
     if (typeof window !== 'undefined') {
-      // Method 1: window.name with full HTML (new simple bookmarklet)
-      if (window.name && window.name.startsWith('scribd_full:')) {
+      const urlParams = new URLSearchParams(window.location.search)
+      const extractId = urlParams.get('extract_id')
+
+      // Method 1: extract_id in URL (new reliable method — server stores data)
+      if (extractId) {
+        // Clean the URL
+        window.history.replaceState(null, '', window.location.pathname)
+        setExtracting(true)
+        toast.info('Processing extracted data...', { description: 'Fetching page images from server' })
+
+        fetch(`/api/scribd/extract-full?id=${extractId}`)
+          .then((r) => r.json())
+          .then((result) => {
+            if (result.success) {
+              setDocInfo(result)
+              setNeedsBrowserExtract(false)
+              setUrl(result.sourceUrl || '')
+              toast.success(`✅ Extracted "${result.title}" with ${result.pageImages?.length || 0} pages! Click Download below.`)
+              window.scrollTo({ top: 0, behavior: 'smooth' })
+            } else {
+              toast.error(result.error || 'Extraction data not found. Please run the bookmarklet again.')
+            }
+          })
+          .catch(() => toast.error('Failed to fetch extracted data'))
+          .finally(() => setExtracting(false))
+      }
+
+      // Method 2: window.name with full HTML (fallback for old bookmarklet)
+      else if (window.name && window.name.startsWith('scribd_full:')) {
         try {
           const data = JSON.parse(window.name.slice('scribd_full:'.length))
           if (data.html) {
-            // Show processing indicator
             setExtracting(true)
             toast.info('Processing extracted data...', { description: 'Extracting page images from the HTML' })
-            // Clean the URL
             window.history.replaceState(null, '', window.location.pathname)
-            // Send full HTML to our extract-full endpoint
             fetch('/api/scribd/extract-full', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -186,17 +206,21 @@ export default function Home() {
             })
               .then((r) => r.json())
               .then((result) => {
+                if (result.success && result.extractId) {
+                  // Fetch the stored result
+                  return fetch(`/api/scribd/extract-full?id=${result.extractId}`).then((r) => r.json())
+                }
+                return result
+              })
+              .then((result) => {
                 if (result.success) {
                   setDocInfo(result)
                   setNeedsBrowserExtract(false)
                   setUrl(data.url || '')
-                  toast.success(`✅ Extracted "${result.title}" with ${result.pageImages?.length || 0} pages! Click Download below.`)
+                  toast.success(`✅ Extracted "${result.title}" with ${result.pageImages?.length || 0} pages!`)
                   window.scrollTo({ top: 0, behavior: 'smooth' })
                 } else {
                   toast.error(result.error || 'Extraction failed')
-                  if (result.debug) {
-                    console.log('Extract debug:', result.debug)
-                  }
                 }
               })
               .catch(() => toast.error('Failed to process extracted data'))
@@ -208,36 +232,7 @@ export default function Home() {
         }
       }
 
-      // Method 2: window.name with pre-extracted URLs (old bookmarklet)
-      else if (window.name && window.name.startsWith('scribd_extract:')) {
-        try {
-          const data = JSON.parse(window.name.slice('scribd_extract:'.length))
-          if (data.urls && data.urls.length > 0) {
-            fetch('/api/scribd/extract', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(data),
-            })
-              .then((r) => r.json())
-              .then((result) => {
-                if (result.success) {
-                  setDocInfo(result)
-                  setNeedsBrowserExtract(false)
-                  setUrl(data.sourceUrl || '')
-                  toast.success(`Extracted "${result.title}" with ${result.pageImages?.length || 0} pages!`)
-                } else {
-                  toast.error(result.error || 'Extraction failed')
-                }
-              })
-              .catch(() => toast.error('Failed to process extracted data'))
-            window.name = ''
-          }
-        } catch {
-          window.name = ''
-        }
-      }
-
-      // Method 3: URL hash (fallback from GET redirect)
+      // Method 3: URL hash (old fallback)
       if (window.location.hash.startsWith('#extracted=')) {
         const encoded = window.location.hash.slice('#extracted='.length)
         try {
@@ -246,7 +241,7 @@ export default function Home() {
             setDocInfo(data)
             setNeedsBrowserExtract(false)
             setUrl(data.sourceUrl || '')
-            toast.success(`Extracted "${data.title}" with ${data.pageImages?.length || 0} pages!`)
+            toast.success(`✅ Extracted "${data.title}" with ${data.pageImages?.length || 0} pages!`)
           }
         } catch {
           // invalid hash data
@@ -257,13 +252,13 @@ export default function Home() {
   }, [])
 
   // Generate the bookmarklet href — DEAD SIMPLE version
-  // Just grabs the entire page HTML and sends it to our server.
-  // Server does ALL the parsing. No regex in the bookmarklet = no bugs.
-  // On success: stores result in window.name and REDIRECTS to the app.
-  // (Can't use window.open — popup blockers block it)
+  // 1. Grabs page HTML → sends to server (synchronous XHR)
+  // 2. Server stores result, returns an ID
+  // 3. Bookmarklet redirects to /?extract_id=ID
+  // 4. App loads, fetches stored data by ID, shows download buttons
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',false);x.setRequestHeader('Content-Type','application/json');x.send(d);try{var r=JSON.parse(x.responseText);if(r.success){window.name='scribd_full:'+d;location.href='${origin}/?from_bookmarklet=1'}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message+'\\n\\nResponse: '+x.responseText.substring(0,200))}}catch(e){alert('Error: '+e.message)}})())`
+    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',false);x.setRequestHeader('Content-Type','application/json');x.send(d);try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){location.href='${origin}/?extract_id='+r.extractId}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message+'\\n\\nResponse: '+x.responseText.substring(0,200))}}catch(e){alert('Error: '+e.message)}})())`
     return code
   }, [])
 

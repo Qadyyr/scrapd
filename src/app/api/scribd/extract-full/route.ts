@@ -10,17 +10,35 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
+// In-memory store for extracted data (keyed by random ID)
+// Data expires after 10 minutes. This works on Vercel because the
+// bookmarklet sends the HTML → gets back an ID → redirects to /?extract_id=ID
+// → the page load fetches the stored data by ID. All within seconds.
+const extractStore = new Map<string, { data: any; timestamp: number }>()
+const STORE_TTL = 10 * 60 * 1000 // 10 minutes
+
+// Clean up old entries periodically
+function cleanStore() {
+  const now = Date.now()
+  for (const [key, value] of extractStore.entries()) {
+    if (now - value.timestamp > STORE_TTL) {
+      extractStore.delete(key)
+    }
+  }
+}
+
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS_HEADERS })
 }
 
 /**
- * Extract endpoint that accepts the FULL page HTML.
- * The bookmarklet just grabs document.documentElement.outerHTML and sends it here.
- * We do ALL the parsing server-side — simpler, more reliable, less error-prone.
+ * POST: Receive full HTML from bookmarklet, parse it, store result, return ID.
+ * GET: Retrieve stored result by ID (called by the app after redirect).
  */
 export async function POST(req: NextRequest) {
   try {
+    cleanStore()
+
     const body = await req.json().catch(() => ({}))
     const { html, title, url: sourceUrl } = body as {
       html: string
@@ -30,7 +48,7 @@ export async function POST(req: NextRequest) {
 
     if (!html || html.length < 1000) {
       return NextResponse.json(
-        { error: 'No HTML content received. Make sure you are on a Scribd document page.' },
+        { error: 'No HTML content received.' },
         { status: 400, headers: CORS_HEADERS }
       )
     }
@@ -59,11 +77,10 @@ export async function POST(req: NextRequest) {
           urls.push(url)
         }
       }
-      if (urls.length > 0) break // Found URLs with this pattern, no need to try more
+      if (urls.length > 0) break
     }
 
     if (urls.length === 0) {
-      // Return debug info about what we found
       return NextResponse.json(
         {
           success: false,
@@ -75,7 +92,6 @@ export async function POST(req: NextRequest) {
             hasContentUrl: html.includes('contentUrl'),
             hasScribdassets: html.includes('scribdassets'),
             hasPages: html.includes('/pages/'),
-            hasImages: html.includes('/images/'),
             title: title || 'unknown',
           },
         },
@@ -91,7 +107,7 @@ export async function POST(req: NextRequest) {
         .replace('html.scribdassets.com', 'html.scribd.com')
     })
 
-    // Extract metadata from HTML
+    // Extract metadata
     const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/i)
     const descMatch = html.match(/<meta\s+property="og:description"\s+content="([^"]*)"/i)
     const thumbMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/i)
@@ -118,7 +134,15 @@ export async function POST(req: NextRequest) {
       source: 'bookmarklet',
     }
 
-    return NextResponse.json(result, { headers: CORS_HEADERS })
+    // Store the result with a random ID
+    const extractId = Math.random().toString(36).substring(2, 15) + Date.now().toString(36)
+    extractStore.set(extractId, { data: result, timestamp: Date.now() })
+
+    // Return the ID — the bookmarklet will redirect to /?extract_id=ID
+    return NextResponse.json(
+      { success: true, extractId, pageCount: pageImages.length, title: cleanTitle },
+      { headers: CORS_HEADERS }
+    )
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Extraction failed.'
     return NextResponse.json(
@@ -126,4 +150,36 @@ export async function POST(req: NextRequest) {
       { status: 500, headers: CORS_HEADERS }
     )
   }
+}
+
+/**
+ * GET: Retrieve stored extraction result by ID.
+ * Called by the app after the bookmarklet redirects to /?extract_id=ID
+ */
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const extractId = searchParams.get('id')
+
+  if (!extractId || !extractStore.has(extractId)) {
+    return NextResponse.json(
+      { success: false, error: 'No extraction data found for this ID. It may have expired.' },
+      { status: 404, headers: CORS_HEADERS }
+    )
+  }
+
+  const entry = extractStore.get(extractId)!
+  const age = Date.now() - entry.timestamp
+
+  if (age > STORE_TTL) {
+    extractStore.delete(extractId)
+    return NextResponse.json(
+      { success: false, error: 'Extraction data expired. Please run the bookmarklet again.' },
+      { status: 404, headers: CORS_HEADERS }
+    )
+  }
+
+  // Return the stored data and clean up
+  const data = entry.data
+  extractStore.delete(extractId) // One-time use
+  return NextResponse.json(data, { headers: CORS_HEADERS })
 }
