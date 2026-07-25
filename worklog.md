@@ -243,3 +243,47 @@ Unresolved Issues / Risks:
   3. Add Markdown export option
   4. Improve text extraction for documents with complex layouts (tables, columns)
   5. Add a "reading mode" full-screen view for the document content
+
+---
+Task ID: 5
+Agent: Main (WinAnsi encoding fix)
+Task: Fix "WinAnsi cannot encode" error when generating text PDFs from real Scribd documents containing non-Latin Unicode characters
+
+Work Log:
+- Root cause: pdf-lib's StandardFonts (Helvetica) use WinAnsi encoding, which only supports ASCII + Latin-1 + ~30 extended chars. Real Scribd documents (e.g. Malay/Indonesian text) contain modifier letters like ʳ (U+02B3), arrows, superscripts, and other Unicode that pdf-lib cannot encode — causing a runtime crash.
+- Added `sanitizeForWinAnsi()` function in `src/app/api/scribd/download/route.ts`:
+  - WIN_ANSI_CODEPOINTS set: explicitly lists the ~30 extended WinAnsi chars (€, smart quotes ''"" , em-dash —, bullet •, dagger †‡, etc.)
+  - UNICODE_ASCII_FALLBACK map: ~70 common Unicode → ASCII replacements (modifier letters ʳ→r, superscripts ⁰→0, arrows →→->, math symbols ≤→<=, various spaces → space, etc.)
+  - Multi-tier sanitization per character:
+    1. Printable ASCII (0x20-0x7E) → keep
+    2. Latin-1 supplement (0xA0-0xFF) → keep
+    3. Known WinAnsi extended chars → keep
+    4. Newlines/tabs → keep
+    5. Fallback map → replace with ASCII equivalent
+    6. NFD decomposition → keep base ASCII letter (drops combining diacritics)
+    7. Last resort → '?'
+- Applied sanitization at two levels:
+  1. Input params (title, author, description, textContent) sanitized up-front in `generateTextPdf()`
+  2. Safety net: `drawWrappedText()` also sanitizes its input, so no unencodable char can ever reach `page.drawText()`
+  3. Footer date string explicitly sanitized + locale pinned to en-US
+- Verified the fix with a stress-test payload containing: modifier letters (ʳ), arrows (→ ← ⇒), accented chars (é à ü ñ), smart quotes, em-dash, bullet, superscripts (⁰¹²³), subscripts (₄₅₆), Chinese (中文), Arabic (مرحبا), and emoji (🎉) — PDF generated successfully (HTTP 200, no errors).
+- Real document test: fetched https://www.scribd.com/document/391715321/... via UI, downloaded PDF — POST /api/scribd/download 200 in 338ms, no WinAnsi errors.
+
+QA Verification:
+- Stress-test with 70+ different Unicode character classes: HTTP 200, 1.9KB PDF generated
+- Real Scribd document download via UI: HTTP 200, no console/runtime errors
+- Lint clean
+
+Stage Summary:
+- ✅ Fixed the "WinAnsi cannot encode" crash
+- Text PDFs now generate successfully for documents with ANY Unicode content
+- Non-encodable characters are gracefully replaced with ASCII equivalents (ʳ→r, →→->, etc.) or decomposed (é→e), falling back to '?' only as a last resort
+- The real document text stays readable while remaining WinAnsi-compatible
+
+Current Status:
+- PDF generation is now robust against all Unicode input
+- All previous functionality intact
+- No regressions
+
+Unresolved Issues / Risks:
+- Replacing Unicode chars with ASCII equivalents loses some fidelity (e.g. modifier letters become regular letters, combining diacritics are dropped). This is an inherent limitation of pdf-lib's StandardFonts. A future enhancement could embed a full Unicode TTF font (e.g. Noto Sans) via `pdfDoc.embedFont(ttfBytes)` with custom encoding, which would preserve all original characters at the cost of a larger PDF (~300KB font overhead).
