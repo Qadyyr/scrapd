@@ -164,12 +164,46 @@ export default function Home() {
 
     // Check for extracted data from the bookmarklet (via window.name or URL hash)
     if (typeof window !== 'undefined') {
-      // Method 1: window.name (bookmarklet stores data here before redirecting)
-      if (window.name && window.name.startsWith('scribd_extract:')) {
+      // Method 1: window.name with full HTML (new simple bookmarklet)
+      if (window.name && window.name.startsWith('scribd_full:')) {
+        try {
+          const data = JSON.parse(window.name.slice('scribd_full:'.length))
+          if (data.html) {
+            // Send full HTML to our extract-full endpoint
+            setExtracting(true)
+            fetch('/api/scribd/extract-full', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(data),
+            })
+              .then((r) => r.json())
+              .then((result) => {
+                if (result.success) {
+                  setDocInfo(result)
+                  setNeedsBrowserExtract(false)
+                  setUrl(data.url || '')
+                  toast.success(`Extracted "${result.title}" with ${result.pageImages?.length || 0} pages!`)
+                } else {
+                  toast.error(result.error || 'Extraction failed')
+                  if (result.debug) {
+                    console.log('Extract debug:', result.debug)
+                  }
+                }
+              })
+              .catch(() => toast.error('Failed to process extracted data'))
+              .finally(() => setExtracting(false))
+            window.name = ''
+          }
+        } catch {
+          window.name = ''
+        }
+      }
+
+      // Method 2: window.name with pre-extracted URLs (old bookmarklet)
+      else if (window.name && window.name.startsWith('scribd_extract:')) {
         try {
           const data = JSON.parse(window.name.slice('scribd_extract:'.length))
           if (data.urls && data.urls.length > 0) {
-            // Send to our extract API to transform URLs → image URLs
             fetch('/api/scribd/extract', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -187,7 +221,6 @@ export default function Home() {
                 }
               })
               .catch(() => toast.error('Failed to process extracted data'))
-            // Clear window.name so it doesn't re-trigger
             window.name = ''
           }
         } catch {
@@ -195,7 +228,7 @@ export default function Home() {
         }
       }
 
-      // Method 2: URL hash (fallback from GET redirect)
+      // Method 3: URL hash (fallback from GET redirect)
       if (window.location.hash.startsWith('#extracted=')) {
         const encoded = window.location.hash.slice('#extracted='.length)
         try {
@@ -214,11 +247,12 @@ export default function Home() {
     }
   }, [])
 
-  // Generate the bookmarklet href (runs in the user's browser on scribd.com)
-  // Tries XHR first (immediate feedback), falls back to redirect via window.name
+  // Generate the bookmarklet href — DEAD SIMPLE version
+  // Just grabs the entire page HTML and sends it to our server.
+  // Server does ALL the parsing. No regex in the bookmarklet = no bugs.
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:(function(){try{var h=document.documentElement.outerHTML;var u=[];var pats=[/contentUrl:\\s*["'](https:\\/\\/html\\.scribdassets\\.com\\/[^"']+\\.jsonp)["']/g,/contentUrl:["\\s]*(https:\\/\\/html\\.scribdassets\\.com\\/[^"')\\s]+\\.jsonp)/g,/(https:\\/\\/html\\.scribdassets\\.com\\/[a-z0-9]+\\/pages\\/[0-9]+-[a-f0-9]+\\.jsonp)/g];for(var i=0;i<pats.length;i++){var m;while((m=pats[i].exec(h))!==null){var url=m[1]||m[0];if(u.indexOf(url)===-1)u.push(url)}if(u.length)break}if(!u.length){alert('Scribd Extractor\\n\\nNo page URLs found.\\n\\nPage length: '+h.length+' chars\\nHas docManager: '+(h.indexOf('docManager')>-1?'YES':'NO')+'\\nHas addPage: '+(h.indexOf('addPage')>-1?'YES':'NO')+'\\nHas contentUrl: '+(h.indexOf('contentUrl')>-1?'YES':'NO')+'\\nHas scribdassets: '+(h.indexOf('scribdassets')>-1?'YES':'NO')+'\\n\\nIf the page just loaded, wait 3 seconds and try again.');return}var t=document.title.replace(/\\s*\\|\\s*Scribd.*$/i,'').trim();var th='';try{th=document.querySelector('meta[property="og:image"]').content||''}catch(e){}var pc=(h.match(/"page_count"\\s*:\\s*(\\d+)/)||[])[1]||u.length;var data=JSON.stringify({urls:u,title:t,sourceUrl:location.href,thumbnail:th,pageCount:parseInt(pc)});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract');x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success){alert('\\u2705 Success! Found '+r.pageImages.length+' pages from \"'+r.title+'\".\\n\\nReturn to the Scribd Downloader tab to download.');window.open('${origin}','_blank')}else{alert('\\u274c Error: '+r.error)}}catch(e){alert('\\u274c Parse error: '+e.message)}};x.onerror=function(){window.name='scribd_extract:'+data;location.href='${origin}/?from_bookmarklet=1'};x.send(data)}catch(e){alert('Bookmarklet error: '+e.message)}})()`
+    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full');x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success){alert('SUCCESS! Found '+r.pageImages.length+' pages. Return to the downloader tab.');window.open('${origin}','_blank')}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){window.name='scribd_full:'+d;location.href='${origin}/?from_bookmarklet=1'};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
     return code
   }, [])
 
