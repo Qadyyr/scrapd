@@ -733,15 +733,28 @@ async function fetchJsonpContent(
       }
     }
 
-    // Check for image tags (scanned documents)
+    // Check for image tags (scanned documents).
+    // Scribd scanned pages use <img class="absimg" orig="..." /> where the
+    // actual image URL is in the `orig` attribute (NOT `src`). The URLs are
+    // typically http://html.scribd.com/.../images/N-HASH.jpg
     const $ = cheerio.load(pageHtml)
 
-    // Look for <img> tags with scribdassets URLs
+    // Look for <img> tags — check orig, src, and data-src attributes
     let imageUrl: string | null = null
     $('img').each((_, el) => {
-      const src = $(el).attr('src') || $(el).attr('data-src')
-      if (src && /scribdassets|scribd/i.test(src) && /\.(jpg|jpeg|png|webp)/i.test(src)) {
-        imageUrl = src
+      const src =
+        $(el).attr('orig') ||
+        $(el).attr('src') ||
+        $(el).attr('data-src')
+      if (!src) return
+      // Match any scribd image URL (scribd.com or scribdassets.com),
+      // with http or https, ending in an image extension
+      if (
+        /scribd/i.test(src) &&
+        /\.(jpg|jpeg|png|webp)/i.test(src)
+      ) {
+        // Upgrade http to https for security/mixed-content
+        imageUrl = src.replace(/^http:\/\//i, 'https://')
         return false // break
       }
     })
@@ -749,10 +762,10 @@ async function fetchJsonpContent(
     // Also check for background-image CSS (some scanned pages use this)
     if (!imageUrl) {
       const bgMatch = pageHtml.match(
-        /background-image\s*:\s*url\(["']?(https:\/\/[^"')\s]+\.(?:jpg|jpeg|png|webp)[^"')\s]*)["']?\)/i
+        /background-image\s*:\s*url\(["']?(https?:\/\/[^"')\s]+\.(?:jpg|jpeg|png|webp)[^"')\s]*)["']?\)/i
       )
       if (bgMatch) {
-        imageUrl = bgMatch[1]
+        imageUrl = bgMatch[1].replace(/^http:\/\//i, 'https://')
       }
     }
 
@@ -761,10 +774,10 @@ async function fetchJsonpContent(
       $('[style*="background"]').each((_, el) => {
         const style = $(el).attr('style') || ''
         const bgUrl = style.match(
-          /url\(["']?(https:\/\/[^"')\s]+\.(?:jpg|jpeg|png|webp)[^"')\s]*)["']?\)/i
+          /url\(["']?(https?:\/\/[^"')\s]+\.(?:jpg|jpeg|png|webp)[^"')\s]*)["']?\)/i
         )
         if (bgUrl) {
-          imageUrl = bgUrl[1]
+          imageUrl = bgUrl[1].replace(/^http:\/\//i, 'https://')
           return false
         }
       })

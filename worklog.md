@@ -420,3 +420,60 @@ Unresolved Issues / Risks:
 - Some words may be dropped in text extraction (Scribd's span positioning artifacts) — inherent limitation
 - page_reader call for the main page still takes 5-16s; the JSONP CDN fetches are fast (<1s each)
 - Large documents (100+ pages) may take longer to fetch all JSONP files
+
+---
+Task ID: 8
+Agent: Main (scanned document image fix)
+Task: Fix scanned document downloads — was only extracting "CamScanner" watermark text instead of actual page images
+
+Work Log:
+- Reproduced the issue with https://www.scribd.com/document/938610413/MDCAT-2025-VERSION-A (22-page CamScanner-scanned exam paper)
+- The downloaded PDF only contained "CamScanner" text repeated 22 times instead of the actual scanned page images
+- Investigated the JSONP page content for scanned documents:
+  - Fetched page 1 JSONP: https://html.scribdassets.com/5iw8cm5r0gfx99c6/pages/1-a087bb4632.jsonp
+  - Found the JSONP contains an `<image_layer>` with `<img class="absimg" orig="..." />` tags
+  - CRITICAL: the actual image URL is in the `orig` attribute, NOT `src`!
+  - The URL pattern is: http://html.scribd.com/{hash}/images/{page}-{hash}.jpg
+  - URLs use `http://` (not https) and `html.scribd.com` (not scribdassets.com)
+- Root cause: my image detection code only checked `src` and `data-src` attributes, and filtered for `scribdassets` URLs — completely missing the `orig` attribute that Scribd uses for scanned page images
+- Fixed `fetchJsonpContent()` in src/lib/scribd.ts:
+  1. Now checks `orig` attribute FIRST (Scribd's scanned page images use this), then `src`, then `data-src`
+  2. Matches any URL containing "scribd" (covers both scribd.com and scribdassets.com)
+  3. Accepts both `http://` and `https://` URLs
+  4. Upgrades `http://` to `https://` for security
+  5. Updated background-image CSS regex to also accept http:// URLs
+- Verified the image URL is accessible: https://html.scribd.com/5iw8cm5r0gfx99c6/images/1-a087bb4632.jpg → HTTP 200, 353KB JPEG (682x1247px)
+
+QA Verification:
+- MDCAT scanned document (https://www.scribd.com/document/938610413/MDCAT-2025-VERSION-A):
+  - 22 JSONP pages fetched from CDN (all HTTP 200)
+  - isScanned: true (correctly detected as image-based)
+  - pageImages: 22 image URLs extracted (https://html.scribd.com/.../images/N-HASH.jpg)
+  - textContent: empty (correct — scanned documents have no extractable text, only the "CamScanner" watermark which is now ignored because page images take priority)
+  - PDF download: HTTP 200, 8.79MB, 22 pages, 682x1247pts per page
+  - pdfinfo confirms: Pages: 22, File size: 8790266 bytes
+  - pdftotext returns empty (expected — scanned images have no text layer)
+  - UI: "Scanned (image-based)" violet badge displayed, "22 pages" badge
+- Full UI flow verified with agent-browser:
+  - Fetched MDCAT document → title "MDCAT 2025 Question Paper Download"
+  - "Scanned (image-based)" badge appears
+  - PDF download: POST /api/scribd/download 200 in 8.8s
+  - History updated to 20 items
+
+Stage Summary:
+- ✅ FIXED: scanned documents now download as image-based PDFs with ACTUAL page images
+- ✅ The key was checking the `orig` attribute on `<img class="absimg">` tags (Scribd's convention for scanned page images)
+- ✅ Image URLs from html.scribd.com are accessible directly (no Cloudflare)
+- ✅ Multi-page scanned PDFs work (tested with 22-page MDCAT exam paper → 8.79MB PDF with all 22 scanned pages)
+- ✅ The downloaded PDF contains the real scanned page images, not just "CamScanner" watermark text
+
+Current Status:
+- Scanned documents (CamScanner scans, image-based PDFs) now download correctly
+- The PDF contains the actual scanned page images — faithful to the original document
+- Both text-based and scanned documents are fully supported
+- Text docs → searchable text PDF; scanned docs → image-based PDF with real page images
+
+Unresolved Issues / Risks:
+- Large scanned documents (50+ pages) may take longer to download (each page image is 300-500KB)
+- The `orig` attribute approach is specific to Scribd's current rendering; if they change their HTML structure, detection may need updating
+- page_reader call for the main page still takes 5-16s; JSONP CDN fetches are fast
