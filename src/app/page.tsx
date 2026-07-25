@@ -301,6 +301,11 @@ export default function Home() {
       else if (format === 'zip') endpoint = '/api/scribd/download-zip'
       else endpoint = '/api/scribd/download-txt'
 
+      // Use an AbortController with a generous 10-minute timeout for
+      // large multi-page documents that take a while to generate.
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 10 * 60 * 1000)
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -317,7 +322,10 @@ export default function Home() {
           isScanned: docInfo.isScanned,
           pageRange: pageRange.trim() || undefined,
         }),
+        signal: controller.signal,
       })
+
+      clearTimeout(timeoutId)
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}))
@@ -954,11 +962,18 @@ export default function Home() {
                             <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
                               <span className="flex items-center gap-1.5">
                                 <Package className="h-3 w-3" />
-                                Generating your {downloading.toUpperCase()}...
+                                {downloadProgress === 0
+                                  ? `Preparing your ${downloading.toUpperCase()} (fetching pages)...`
+                                  : downloadProgress < 100
+                                    ? `Downloading your ${downloading.toUpperCase()}...`
+                                    : 'Finalizing...'}
                               </span>
-                              <span>{downloadProgress}%</span>
+                              {downloadProgress > 0 && <span>{downloadProgress}%</span>}
                             </div>
-                            <Progress value={downloadProgress} className="h-1.5" />
+                            <Progress
+                              value={downloadProgress === 0 ? undefined : downloadProgress}
+                              className="h-1.5"
+                            />
                           </motion.div>
                         )}
                       </AnimatePresence>

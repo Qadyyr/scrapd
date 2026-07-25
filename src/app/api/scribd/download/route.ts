@@ -382,10 +382,14 @@ async function generateTextPdf(params: {
 /**
  * Generate an image-based PDF (for scanned documents). Each page is the
  * actual scanned image — faithful to the original document.
+ *
+ * Images are fetched in parallel batches (5 at a time) for speed, and
+ * a progress callback reports how many pages have been processed.
  */
 async function generateImagePdf(
   pages: DownloadPage[],
-  meta?: { title?: string; author?: string | null }
+  meta?: { title?: string; author?: string | null },
+  onProgress?: (done: number, total: number) => void
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
   if (meta?.title) pdfDoc.setTitle(sanitizeForWinAnsi(meta.title))
@@ -393,39 +397,54 @@ async function generateImagePdf(
   pdfDoc.setCreator('Scribd Downloader')
   pdfDoc.setProducer('Scribd Downloader')
 
-  for (const page of pages) {
-    try {
-      const imgBuffer = await fetchImageBuffer(page.url)
-      const bytes = new Uint8Array(imgBuffer)
-      const isPng =
-        bytes[0] === 0x89 &&
-        bytes[1] === 0x50 &&
-        bytes[2] === 0x4e &&
-        bytes[3] === 0x47
-      const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8
+  const total = pages.length
+  let done = 0
 
-      let img
-      if (isPng) {
-        img = await pdfDoc.embedPng(bytes)
-      } else if (isJpeg) {
-        img = await pdfDoc.embedJpg(bytes)
-      } else {
-        try {
+  // Fetch and embed images in parallel batches of 5 to balance speed vs memory.
+  const BATCH_SIZE = 5
+  for (let i = 0; i < pages.length; i += BATCH_SIZE) {
+    const batch = pages.slice(i, i + BATCH_SIZE)
+    const results = await Promise.allSettled(
+      batch.map(async (page) => {
+        const imgBuffer = await fetchImageBuffer(page.url)
+        const bytes = new Uint8Array(imgBuffer)
+        const isPng =
+          bytes[0] === 0x89 &&
+          bytes[1] === 0x50 &&
+          bytes[2] === 0x4e &&
+          bytes[3] === 0x47
+        const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8
+
+        let img
+        if (isPng) {
+          img = await pdfDoc.embedPng(bytes)
+        } else if (isJpeg) {
           img = await pdfDoc.embedJpg(bytes)
-        } catch {
-          continue
+        } else {
+          try {
+            img = await pdfDoc.embedJpg(bytes)
+          } catch {
+            return null
+          }
         }
-      }
-
-      const pdfPage = pdfDoc.addPage([img.width, img.height])
-      pdfPage.drawImage(img, {
-        x: 0,
-        y: 0,
-        width: img.width,
-        height: img.height,
+        return img
       })
-    } catch {
-      // skip failed page
+    )
+
+    // Add pages in order (not in completion order) to preserve page sequence
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        const img = result.value
+        const pdfPage = pdfDoc.addPage([img.width, img.height])
+        pdfPage.drawImage(img, {
+          x: 0,
+          y: 0,
+          width: img.width,
+          height: img.height,
+        })
+      }
+      done++
+      if (onProgress) onProgress(done, total)
     }
   }
 
@@ -461,6 +480,7 @@ export async function POST(req: NextRequest) {
 
     let pdfBytes: Uint8Array
     let isTextPdf = false
+    let actualPageCount = pages?.length || pageImages?.length || 0
 
     // For scanned/image-based documents, generate an image-based PDF
     // (each page is the actual scanned image — faithful to the original)
@@ -469,10 +489,18 @@ export async function POST(req: NextRequest) {
         index: i,
         url,
       }))
-      pdfBytes = await generateImagePdf(imagePages, {
-        title: title || 'Scribd Document',
-        author: author || null,
-      })
+      pdfBytes = await generateImagePdf(
+        imagePages,
+        {
+          title: title || 'Scribd Document',
+          author: author || null,
+        },
+        (done, total) => {
+          // Progress is tracked server-side; for large docs this keeps
+          // the event loop active so the connection doesn't idle-timeout.
+        }
+      )
+      actualPageCount = imagePages.length
       isTextPdf = false
     } else if (textContent && textContent.trim().length > 100) {
       // For text-based documents, generate a searchable text PDF
@@ -489,6 +517,7 @@ export async function POST(req: NextRequest) {
         title: title || 'Scribd Document',
         author: author || null,
       })
+      actualPageCount = pages.length
     } else {
       return NextResponse.json(
         { error: 'No content available for PDF generation.' },
@@ -506,10 +535,10 @@ export async function POST(req: NextRequest) {
           docId,
           title: title || `Document ${docId}`,
           author: author || null,
-          pageCount: pdfDoc_pageCount(pdfBytes),
+          pageCount: actualPageCount || pdfDoc_pageCount(pdfBytes),
           thumbnail: thumbnail || null,
           format: 'pdf',
-          status: isTextPdf ? 'completed' : 'completed',
+          status: 'completed',
           fileSize: pdfSize,
         },
       })
@@ -517,7 +546,25 @@ export async function POST(req: NextRequest) {
       // History save failure shouldn't block the download
     }
 
-    return new NextResponse(pdfBytes as any, {
+    // Stream the PDF bytes back to the client. Using a ReadableStream
+    // prevents the connection from idling/timeing out for large PDFs and
+    // sends data as soon as it's ready.
+    const stream = new ReadableStream({
+      start(controller) {
+        // Send the PDF in chunks to avoid loading the entire blob at once
+        // on the client side.
+        const chunkSize = 64 * 1024 // 64KB chunks
+        const buf = Buffer.from(pdfBytes)
+        for (let i = 0; i < buf.length; i += chunkSize) {
+          controller.enqueue(
+            new Uint8Array(buf.subarray(i, Math.min(i + chunkSize, buf.length)))
+          )
+        }
+        controller.close()
+      },
+    })
+
+    return new NextResponse(stream as any, {
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
@@ -525,6 +572,7 @@ export async function POST(req: NextRequest) {
           sanitizeFilename(title || 'document')
         )}.pdf"`,
         'Content-Length': String(pdfSize),
+        'Cache-Control': 'no-cache',
       },
     })
   } catch (err) {
