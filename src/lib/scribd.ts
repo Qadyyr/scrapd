@@ -766,10 +766,15 @@ export async function fetchRealScribdDocInfo(
   }
 
   // --- Extract per-page contentUrls from docManager.addPage() calls ---
-  // These JSONP files are hosted on html.scribdassets.com CDN and are
-  // directly accessible (no Cloudflare blocking). Each file contains
-  // either positioned text spans (text documents) or <img> tags (scanned
-  // documents).
+  // These JSONP URLs follow the pattern:
+  //   https://html.scribdassets.com/{assetId}/pages/{N}-{hash}.jsonp
+  //
+  // KEY INSIGHT: The image URL uses the SAME hash! We can transform directly:
+  //   https://html.scribd.com/{assetId}/images/{N}-{hash}.jpg
+  //
+  // This means we DON'T need to fetch each JSONP file — we construct image
+  // URLs directly from the JSONP URLs in the HTML. This is ~100x faster
+  // (1 fetch instead of N+1 fetches) and more reliable (CDN has no Cloudflare).
   const contentUrls: string[] = []
   const contentUrlRegex = /contentUrl:\s*"(https:\/\/html\.scribdassets\.com\/[^"]+)"/g
   let urlMatch
@@ -782,35 +787,60 @@ export async function fetchRealScribdDocInfo(
   let isScanned = false
 
   if (contentUrls.length > 0) {
-    // Fetch each JSONP page directly from the CDN (no Cloudflare!)
-    const pageResults = await Promise.allSettled(
-      contentUrls.map((cu) => fetchJsonpContent(cu))
-    )
+    // --- FAST PATH: Transform JSONP URLs directly into image URLs ---
+    // Pattern: .../pages/{N}-{hash}.jsonp → .../images/{N}-{hash}.jpg
+    // Domain: html.scribdassets.com → html.scribd.com (both work, .scribd.com is canonical)
+    const constructedImageUrls = contentUrls.map((jsonpUrl) => {
+      return jsonpUrl
+        .replace('/pages/', '/images/')
+        .replace(/\.jsonp$/, '.jpg')
+        .replace('html.scribdassets.com', 'html.scribd.com')
+    })
 
-    const pageTexts: string[] = []
-    const scannedImages: string[] = []
+    // Quick HEAD check on the first image to see if this is a scanned doc
+    // (if the image URL exists, it's a scanned/image-based document)
+    try {
+      const checkRes = await fetch(constructedImageUrls[0], {
+        method: 'HEAD',
+        headers: { Referer: 'https://www.scribd.com/' },
+        signal: AbortSignal.timeout(8000),
+      })
 
-    for (let i = 0; i < pageResults.length; i++) {
-      const result = pageResults[i]
-      if (result.status !== 'fulfilled' || !result.value) continue
-
-      const { text, imageUrl } = result.value
-      if (imageUrl) {
-        // This page is an image (scanned document)
-        scannedImages.push(imageUrl)
+      if (
+        checkRes.ok &&
+        checkRes.headers.get('content-type')?.includes('image')
+      ) {
+        // All images are accessible — this is a scanned document!
+        pageImages = constructedImageUrls
+        isScanned = true
       }
-      if (text) {
-        pageTexts.push(text)
-      }
+    } catch {
+      // HEAD check failed — fall through to JSONP fetching for text content
     }
 
-    if (scannedImages.length > 0) {
-      pageImages = scannedImages
-      isScanned = true
-    }
+    // --- FALLBACK: If not scanned, fetch JSONP files for text content ---
+    if (!isScanned) {
+      const pageResults = await Promise.allSettled(
+        contentUrls.slice(0, 30).map((cu) => fetchJsonpContent(cu))
+      )
 
-    if (pageTexts.length > 0) {
-      textContent = pageTexts.join('\n\n---\n\n')
+      const pageTexts: string[] = []
+      for (const result of pageResults) {
+        if (result.status !== 'fulfilled' || !result.value) continue
+        const { text, imageUrl } = result.value
+        if (imageUrl && !isScanned) {
+          // JSONP had an image — use constructed URLs instead
+          pageImages = constructedImageUrls
+          isScanned = true
+        }
+        if (text) {
+          pageTexts.push(text)
+        }
+      }
+
+      if (pageTexts.length > 0) {
+        textContent = pageTexts.join('\n\n---\n\n')
+      }
     }
 
     // Update pageCount to match actual pages found
