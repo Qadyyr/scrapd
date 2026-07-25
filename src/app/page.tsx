@@ -153,6 +153,8 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = React.useState('')
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
   const [showShortcuts, setShowShortcuts] = React.useState(false)
+  const [showExtractModal, setShowExtractModal] = React.useState(false)
+  const [extracting, setExtracting] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   // Load history on mount
@@ -284,6 +286,79 @@ export default function Home() {
       toast.error(msg)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Handle extracted data from the bookmarklet (user's browser bypasses Cloudflare)
+  async function handleExtractedData(data: {
+    urls: string[]
+    title: string
+    sourceUrl: string
+    thumbnail?: string
+    author?: string
+    description?: string
+    pageCount?: number
+  }) {
+    setExtracting(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/scribd/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        throw new Error(result.error || 'Extraction failed')
+      }
+      setDocInfo(result)
+      setShowExtractModal(false)
+      toast.success(`Extracted "${result.title}" with ${result.pageImages?.length || 0} pages!`)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Extraction failed'
+      toast.error(msg)
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  // Handle pasted HTML (fallback when bookmarklet isn't available)
+  async function handlePastedHtml(html: string, sourceUrl: string) {
+    setExtracting(true)
+    setError(null)
+    try {
+      // Extract JSONP URLs from the pasted HTML
+      const urlRegex = /contentUrl:\s*"(https:\/\/html\.scribdassets\.com\/[^"]+\.jsonp)"/g
+      const urls: string[] = []
+      let match
+      while ((match = urlRegex.exec(html)) !== null) {
+        urls.push(match[1])
+      }
+
+      // Extract metadata
+      const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/i)
+      const descMatch = html.match(/<meta\s+property="og:description"\s+content="([^"]*)"/i)
+      const thumbMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]*)"/i)
+      const pcMatch = html.match(/"page_count"\s*:\s*(\d+)/)
+
+      if (urls.length === 0) {
+        throw new Error('No Scribd page URLs found in the pasted HTML. Make sure you copied the full page source.')
+      }
+
+      await handleExtractedData({
+        urls,
+        title: titleMatch ? titleMatch[1] : 'Scribd Document',
+        sourceUrl: sourceUrl || url,
+        thumbnail: thumbMatch ? thumbMatch[1] : undefined,
+        description: descMatch ? descMatch[1] : undefined,
+        pageCount: pcMatch ? parseInt(pcMatch[1], 10) : undefined,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Paste extraction failed'
+      toast.error(msg)
+    } finally {
+      setExtracting(false)
     }
   }
 
@@ -698,6 +773,16 @@ export default function Home() {
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 Try with sample data
+              </Button>
+              <span className="text-muted-foreground/40">•</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowExtractModal(true)}
+                className="text-muted-foreground gap-1.5"
+              >
+                <Zap className="h-3.5 w-3.5" />
+                Manual Extract (bypasses Cloudflare)
               </Button>
               <span className="text-muted-foreground/40">•</span>
               <Button
@@ -1549,6 +1634,298 @@ export default function Home() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Manual Extract Modal (bookmarklet + paste HTML) */}
+      <ExtractModal
+        open={showExtractModal}
+        onClose={() => setShowExtractModal(false)}
+        onExtracted={handleExtractedData}
+        onPastedHtml={handlePastedHtml}
+        extracting={extracting}
+        currentUrl={url}
+      />
     </div>
+  )
+}
+
+// ---------- Extract Modal Component ----------
+interface ExtractModalProps {
+  open: boolean
+  onClose: () => void
+  onExtracted: (data: {
+    urls: string[]
+    title: string
+    sourceUrl: string
+    thumbnail?: string
+    author?: string
+    description?: string
+    pageCount?: number
+  }) => void
+  onPastedHtml: (html: string, sourceUrl: string) => void
+  extracting: boolean
+  currentUrl: string
+}
+
+function ExtractModal({
+  open,
+  onClose,
+  onExtracted,
+  onPastedHtml,
+  extracting,
+  currentUrl,
+}: ExtractModalProps) {
+  const [tab, setTab] = React.useState<'bookmarklet' | 'paste'>('bookmarklet')
+  const [pastedHtml, setPastedHtml] = React.useState('')
+  const [pasteUrl, setPasteUrl] = React.useState('')
+
+  // Generate the bookmarklet code
+  // The bookmarklet runs on scribd.com, so it needs our app's URL hardcoded
+  const appOrigin = typeof window !== 'undefined' ? window.location.origin : ''
+  const bookmarkletCode = React.useMemo(() => {
+    const code = `javascript:(function(){
+  try {
+    var html = document.documentElement.outerHTML;
+    var matches = html.match(/contentUrl:\\s*"(https:\\/\\/html\\.scribdassets\\.com\\/[^"]+\\.jsonp)"/g) || [];
+    var urls = matches.map(function(m){ return m.match(/"(https:\\/\\/[^"]+)"/)[1]; });
+    if(urls.length === 0){ alert('No Scribd page URLs found. Make sure you are on a Scribd document page.'); return; }
+    var title = document.title.replace(/\\s*\\|\\s*Scribd.*$/i,'').trim();
+    var thumb = (document.querySelector('meta[property="og:image"]')||{}).content || null;
+    var desc = (document.querySelector('meta[property="og:description"]')||{}).content || null;
+    var pc = (html.match(/"page_count"\\s*:\\s*(\\d+)/)||[])[1] || urls.length;
+    var payload = JSON.stringify({urls:urls,title:title,sourceUrl:location.href,thumbnail:thumb,description:desc,pageCount:parseInt(pc)});
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '${appOrigin}/api/scribd/extract');
+    xhr.setRequestHeader('Content-Type','application/json');
+    xhr.onload = function(){
+      try {
+        var r = JSON.parse(xhr.responseText);
+        if(r.success){ alert('✅ Extracted ' + (r.pageImages||[]).length + ' pages from "' + r.title + '"!\\n\\nReturn to the Scribd Downloader tab to download.'); window.open('${appOrigin}', '_blank'); }
+        else { alert('❌ Error: ' + (r.error||'unknown')); }
+      } catch(e){ alert('❌ Parse error: ' + e.message); }
+    };
+    xhr.onerror = function(){ alert('❌ Network error. Check your connection.'); };
+    xhr.send(payload);
+  } catch(e) { alert('❌ Error: ' + e.message); }
+})();`
+    return code
+  }, [appOrigin])
+
+  if (!open) return null
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+        onClick={onClose}
+      >
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.95, opacity: 0 }}
+          className="relative max-w-2xl w-full max-h-[90vh] overflow-y-auto scrollbar-custom"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Card className="shadow-2xl">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold flex items-center gap-2">
+                  <Zap className="h-5 w-5 text-primary" />
+                  Manual Extract
+                </h3>
+                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onClose}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* Tab selector */}
+              <div className="flex gap-1 p-1 bg-muted rounded-lg mb-5">
+                <button
+                  onClick={() => setTab('bookmarklet')}
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    tab === 'bookmarklet'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Bookmarklet (one-click)
+                </button>
+                <button
+                  onClick={() => setTab('paste')}
+                  className={`flex-1 py-2 px-3 rounded-md text-sm font-medium transition-colors ${
+                    tab === 'paste'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Paste Page Source
+                </button>
+              </div>
+
+              {tab === 'bookmarklet' ? (
+                <div className="space-y-4">
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
+                    <p className="text-sm text-emerald-700 dark:text-emerald-400 font-medium mb-1">
+                      ✅ 100% Free — No Cloudflare issues
+                    </p>
+                    <p className="text-xs text-emerald-700/80 dark:text-emerald-400/80">
+                      Your browser bypasses Cloudflare naturally. The bookmarklet extracts
+                      page URLs and sends them here.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">How to use:</p>
+                    <ol className="space-y-2 text-sm text-muted-foreground">
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">1.</span>
+                        <span>
+                          Drag this link to your bookmarks bar:{' '}
+                          <a
+                            href={bookmarkletCode}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              toast.info('Drag this link to your bookmarks bar!')
+                            }}
+                            className="inline-block px-3 py-1 bg-primary text-primary-foreground rounded-md text-xs font-semibold cursor-grab hover:opacity-90"
+                          >
+                            📥 Extract Scribd
+                          </a>
+                        </span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">2.</span>
+                        <span>
+                          Open any Scribd document page in your browser (Cloudflare will
+                          pass since you're a real user).
+                        </span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">3.</span>
+                        <span>Click the "Extract Scribd" bookmarklet from your bookmarks bar.</span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">4.</span>
+                        <span>
+                          The bookmarklet extracts all page URLs and sends them here.
+                          Return to this tab to download!
+                        </span>
+                      </li>
+                    </ol>
+                  </div>
+
+                  <div className="bg-muted/50 rounded-lg p-3">
+                    <p className="text-xs text-muted-foreground">
+                      💡 <strong>Tip:</strong> If you don't see your bookmarks bar, press{' '}
+                      <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-background border rounded">Ctrl/Cmd + Shift + B</kbd>{' '}
+                      to show it.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
+                    <p className="text-sm text-blue-700 dark:text-blue-400 font-medium mb-1">
+                      📋 Paste the Scribd page source
+                    </p>
+                    <p className="text-xs text-blue-700/80 dark:text-blue-400/80">
+                      Works when the bookmarklet isn't available. Your browser still
+                      bypasses Cloudflare.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium">How to use:</p>
+                    <ol className="space-y-2 text-sm text-muted-foreground">
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">1.</span>
+                        <span>
+                          Open the Scribd document page in your browser
+                          {currentUrl && (
+                            <>
+                              {' '}
+                              — or{' '}
+                              <a
+                                href={currentUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary underline"
+                              >
+                                open your URL
+                              </a>
+                            </>
+                          )}
+                        </span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">2.</span>
+                        <span>
+                          Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-muted border rounded">Ctrl/Cmd + U</kbd>{' '}
+                          to view page source (or right-click → View Page Source)
+                        </span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">3.</span>
+                        <span>
+                          Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-muted border rounded">Ctrl/Cmd + A</kbd>{' '}
+                          then <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-muted border rounded">Ctrl/Cmd + C</kbd>{' '}
+                          to copy everything
+                        </span>
+                      </li>
+                      <li className="flex gap-2">
+                        <span className="font-bold text-primary shrink-0">4.</span>
+                        <span>Paste it into the box below and click "Extract"</span>
+                      </li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-muted-foreground mb-1.5 block">
+                      Scribd URL (the document you opened)
+                    </label>
+                    <Input
+                      type="text"
+                      placeholder="https://www.scribd.com/document/..."
+                      value={pasteUrl || currentUrl}
+                      onChange={(e) => setPasteUrl(e.target.value)}
+                      className="h-9 text-sm mb-3"
+                    />
+                    <label className="text-xs text-muted-foreground mb-1.5 block">
+                      Paste the full page source here
+                    </label>
+                    <textarea
+                      className="w-full h-40 p-3 text-xs font-mono rounded-md border border-border bg-background resize-y scrollbar-custom"
+                      placeholder="Paste the page source here (Ctrl+V)..."
+                      value={pastedHtml}
+                      onChange={(e) => setPastedHtml(e.target.value)}
+                    />
+                  </div>
+
+                  <Button
+                    onClick={() => onPastedHtml(pastedHtml, pasteUrl || currentUrl)}
+                    disabled={extracting || !pastedHtml.trim()}
+                    className="w-full gap-2"
+                  >
+                    {extracting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Extracting...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="h-4 w-4" />
+                        Extract Page URLs
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
   )
 }
