@@ -161,12 +161,31 @@ export default function Home() {
   // Load history on mount
   React.useEffect(() => {
     loadHistory()
+
+    // Check for extracted data in the URL hash (from bookmarklet redirect)
+    if (typeof window !== 'undefined' && window.location.hash.startsWith('#extracted=')) {
+      const encoded = window.location.hash.slice('#extracted='.length)
+      try {
+        const data = JSON.parse(decodeURIComponent(encoded))
+        if (data.success) {
+          setDocInfo(data)
+          setNeedsBrowserExtract(false)
+          setUrl(data.sourceUrl || '')
+          toast.success(`Extracted "${data.title}" with ${data.pageImages?.length || 0} pages!`)
+          // Clear the hash so it doesn't re-trigger on refresh
+          window.history.replaceState(null, '', window.location.pathname)
+        }
+      } catch {
+        // invalid hash data
+      }
+    }
   }, [])
 
   // Generate the bookmarklet href (runs in the user's browser on scribd.com)
+  // Uses REDIRECT (not XHR) so it works on mobile too — no CORS issues!
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:(function(){try{var h=document.documentElement.outerHTML;var m=h.match(/contentUrl:\\s*"(https:\\/\\/html\\.scribdassets\\.com\\/[^"]+\\.jsonp)"/g)||[];var u=m.map(function(x){return x.match(/"(https:\\/\\/[^"]+)"/)[1]});if(!u.length){alert('No Scribd pages found. Make sure you are on a Scribd document page.');return}var t=document.title.replace(/\\s*\\|\\s*Scribd.*$/i,'').trim();var th=(document.querySelector('meta[property="og:image"]')||{}).content||null;var pc=(h.match(/"page_count"\\s*:\\s*(\\d+)/)||[])[1]||u.length;var p=JSON.stringify({urls:u,title:t,sourceUrl:location.href,thumbnail:th,pageCount:parseInt(pc)});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract');x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success){alert('\\u2705 Extracted '+(r.pageImages||[]).length+' pages from "'+r.title+'"!\\n\\nReturn to the Scribd Downloader tab to download.');window.open('${origin}','_blank')}else{alert('\\u274c Error: '+(r.error||'unknown'))}}catch(e){alert('\\u274c Parse error: '+e.message)}};x.onerror=function(){alert('\\u274c Network error')};x.send(p)}catch(e){alert('\\u274c Error: '+e.message)}})()`
+    const code = `javascript:(function(){try{var h=document.documentElement.outerHTML;var m=h.match(/contentUrl:\\s*"(https:\\/\\/html\\.scribdassets\\.com\\/[^"]+\\.jsonp)"/g)||[];var u=m.map(function(x){return x.match(/"(https:\\/\\/[^"]+)"/)[1]});if(!u.length){alert('No Scribd pages found. Open a Scribd document page first.');return}var t=document.title.replace(/\\s*\\|\\s*Scribd.*$/i,'').trim();var th=(document.querySelector('meta[property="og:image"]')||{}).content||'';var pc=(h.match(/"page_count"\\s*:\\s*(\\d+)/)||[])[1]||u.length;var p='?urls='+encodeURIComponent(u.join(','))+'&title='+encodeURIComponent(t)+'&source='+encodeURIComponent(location.href)+'&thumbnail='+encodeURIComponent(th)+'&pageCount='+pc;location.href='${origin}/api/scribd/extract'+p}catch(e){alert('Error: '+e.message)}})()`
     return code
   }, [])
 
@@ -870,6 +889,7 @@ export default function Home() {
                         <p className="text-sm text-muted-foreground">
                           Scribd blocks servers, but your browser passes automatically.
                           Set up the extractor once — then it's just 2 clicks every time.
+                          Works on desktop and mobile!
                         </p>
                       </div>
                     </div>
@@ -897,6 +917,19 @@ export default function Home() {
                             (Press <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-background border rounded">Ctrl/Cmd+Shift+B</kbd> to show bookmarks bar)
                           </span>
                         </div>
+                        <p className="text-xs text-muted-foreground pl-7">
+                          📱 <strong>Mobile:</strong> Long-press the button → "Copy link" →
+                          paste into a new bookmark's URL field. Or copy this code:
+                        </p>
+                        <details className="pl-7">
+                          <summary className="text-xs text-primary cursor-pointer">Show copyable code</summary>
+                          <textarea
+                            readOnly
+                            className="w-full mt-2 p-2 text-[10px] font-mono rounded border border-border bg-background h-20 scrollbar-custom"
+                            value={bookmarkletHref}
+                            onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                          />
+                        </details>
                       </div>
 
                       <div className="bg-muted/50 rounded-lg p-4 space-y-2">
