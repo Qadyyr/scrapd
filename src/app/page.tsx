@@ -18,15 +18,12 @@ import {
   Sparkles,
   RefreshCw,
   Copy,
-  Check,
   X,
   ImageIcon,
   Star,
   Search,
   FileArchive,
   TrendingUp,
-  HardDrive,
-  Files,
   Calendar,
   Keyboard,
   ListChecks,
@@ -56,7 +53,6 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { AnimatedCounter } from '@/components/animated-counter'
 import { useClipboardPaste, useKeyboardShortcuts } from '@/hooks/use-shortcuts'
 import { toast } from 'sonner'
 
@@ -97,16 +93,6 @@ interface HistoryItem {
   fileSize: number
   favorite: boolean
   createdAt: string
-}
-
-interface Stats {
-  totalDownloads: number
-  totalPages: number
-  totalSize: number
-  pdfCount: number
-  zipCount: number
-  recentCount: number
-  todayCount: number
 }
 
 // ---------- Constants ----------
@@ -163,18 +149,15 @@ export default function Home() {
   const [history, setHistory] = React.useState<HistoryItem[]>([])
   const [historyLoading, setHistoryLoading] = React.useState(true)
   const [previewPage, setPreviewPage] = React.useState<DocPage | null>(null)
-  const [stats, setStats] = React.useState<Stats | null>(null)
   const [pageRange, setPageRange] = React.useState('')
-  const [selectedPages, setSelectedPages] = React.useState<Set<number>>(new Set())
   const [searchQuery, setSearchQuery] = React.useState('')
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
   const [showShortcuts, setShowShortcuts] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
-  // Load history and stats on mount
+  // Load history on mount
   React.useEffect(() => {
     loadHistory()
-    loadStats()
   }, [])
 
   async function loadHistory() {
@@ -190,22 +173,6 @@ export default function Home() {
     } finally {
       setHistoryLoading(false)
     }
-  }
-
-  async function loadStats() {
-    try {
-      const res = await fetch('/api/scribd/stats')
-      if (res.ok) {
-        const data = await res.json()
-        setStats(data)
-      }
-    } catch {
-      // silent
-    }
-  }
-
-  async function refreshAll() {
-    await Promise.all([loadHistory(), loadStats()])
   }
 
   // Clipboard paste detection
@@ -233,6 +200,11 @@ export default function Home() {
     escape: () => {
       if (previewPage) setPreviewPage(null)
       else if (showShortcuts) setShowShortcuts(false)
+      else if (url && document.activeElement === inputRef.current) {
+        setUrl('')
+        setDocInfo(null)
+        setError(null)
+      }
     },
   })
 
@@ -252,7 +224,6 @@ export default function Home() {
     setDocInfo(null)
     setDownloadProgress(0)
     setPageRange('')
-    setSelectedPages(new Set())
 
     try {
       const res = await fetch('/api/scribd/info', {
@@ -293,7 +264,6 @@ export default function Home() {
     setDocInfo(null)
     setDownloadProgress(0)
     setPageRange('')
-    setSelectedPages(new Set())
 
     try {
       const res = await fetch('/api/scribd/info', {
@@ -390,7 +360,7 @@ export default function Home() {
             ? 'ZIP archive downloaded!'
             : 'Text file downloaded!'
       )
-      refreshAll()
+      loadHistory()
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Download failed'
       toast.error(msg)
@@ -427,7 +397,6 @@ export default function Home() {
     try {
       await fetch(`/api/scribd/history?id=${id}`, { method: 'DELETE' })
       setHistory((prev) => prev.filter((h) => h.id !== id))
-      loadStats()
       toast.success('Removed from history')
     } catch {
       toast.error('Failed to delete')
@@ -458,7 +427,6 @@ export default function Home() {
     try {
       await fetch('/api/scribd/history', { method: 'DELETE' })
       setHistory([])
-      setStats(null)
       toast.success('History cleared')
     } catch {
       toast.error('Failed to clear history')
@@ -515,34 +483,6 @@ export default function Home() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // Page selection helpers
-  function togglePageSelection(idx: number) {
-    setSelectedPages((prev) => {
-      const next = new Set(prev)
-      if (next.has(idx)) next.delete(idx)
-      else next.add(idx)
-      return next
-    })
-  }
-
-  function selectAllPages() {
-    if (!docInfo) return
-    setSelectedPages(new Set(docInfo.pages.map((p) => p.index)))
-  }
-
-  function clearPageSelection() {
-    setSelectedPages(new Set())
-  }
-
-  function downloadSelectedPages() {
-    if (!docInfo || selectedPages.size === 0) return
-    const indices = Array.from(selectedPages).sort((a, b) => a - b)
-    const range = indices.map((i) => i + 1).join(',')
-    setPageRange(range)
-    toast.info(`Downloading ${indices.length} selected pages`)
-    handleDownload('pdf')
-  }
-
   // Filtered history based on search and favorites
   const filteredHistory = React.useMemo(() => {
     return history.filter((item) => {
@@ -558,13 +498,6 @@ export default function Home() {
       return true
     })
   }, [history, favoritesOnly, searchQuery])
-
-  // Compute selected range description
-  const selectedRangeText = React.useMemo(() => {
-    if (selectedPages.size === 0) return 'All pages'
-    if (selectedPages.size === docInfo?.pages.length) return 'All pages'
-    return `${selectedPages.size} of ${docInfo?.pages.length} pages selected`
-  }, [selectedPages, docInfo])
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -656,18 +589,47 @@ export default function Home() {
                     placeholder="https://www.scribd.com/document/..."
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    className="pl-10 pr-10 h-12 border-0 bg-transparent text-base focus-visible:ring-0 focus-visible:ring-offset-0"
+                    className="pl-10 pr-20 h-12 border-0 bg-transparent text-base focus-visible:ring-0 focus-visible:ring-offset-0"
                     disabled={loading}
                   />
                   {url && (
-                    <button
-                      type="button"
-                      onClick={copyUrl}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                      aria-label="Copy URL"
-                    >
-                      <Copy className="h-4 w-4" />
-                    </button>
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={copyUrl}
+                              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                              aria-label="Copy URL"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Copy URL</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUrl('')
+                                setDocInfo(null)
+                                setError(null)
+                                inputRef.current?.focus()
+                              }}
+                              className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                              aria-label="Clear URL"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent>Clear (Esc)</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
                   )}
                 </div>
                 <Button
@@ -742,48 +704,6 @@ export default function Home() {
             </motion.div>
           </div>
         </section>
-
-        {/* Statistics Dashboard */}
-        {stats && stats.totalDownloads > 0 && (
-          <section className="container mx-auto max-w-5xl px-4 pb-4">
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4 }}
-              className="grid grid-cols-2 lg:grid-cols-4 gap-3"
-            >
-              <StatCard
-                icon={Download}
-                label="Total Downloads"
-                value={stats.totalDownloads}
-                color="primary"
-                sublabel={`${stats.todayCount} today`}
-              />
-              <StatCard
-                icon={FileText}
-                label="Total Pages"
-                value={stats.totalPages}
-                color="chart-2"
-                sublabel="across all docs"
-              />
-              <StatCard
-                icon={HardDrive}
-                label="Storage Used"
-                value={0}
-                displayValue={formatBytes(stats.totalSize)}
-                color="chart-4"
-                sublabel="downloaded"
-              />
-              <StatCard
-                icon={TrendingUp}
-                label="This Week"
-                value={stats.recentCount}
-                color="chart-1"
-                sublabel={`${stats.pdfCount} PDF • ${stats.zipCount} ZIP`}
-              />
-            </motion.div>
-          </section>
-        )}
 
         {/* Error Display */}
         <div className="container mx-auto max-w-4xl px-4">
@@ -1098,43 +1018,9 @@ export default function Home() {
                         Page Preview
                         <Badge variant="secondary">{docInfo.pages.length} pages</Badge>
                       </h3>
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="text-muted-foreground">{selectedRangeText}</span>
-                        <Separator orientation="vertical" className="h-4" />
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={selectAllPages}
-                          className="h-7 text-xs gap-1"
-                        >
-                          <Check className="h-3 w-3" />
-                          Select all
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={clearPageSelection}
-                          className="h-7 text-xs gap-1"
-                        >
-                          <X className="h-3 w-3" />
-                          Clear
-                        </Button>
-                        {selectedPages.size > 0 && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={downloadSelectedPages}
-                            className="h-7 text-xs gap-1"
-                          >
-                            <Download className="h-3 w-3" />
-                            Download {selectedPages.size}
-                          </Button>
-                        )}
-                      </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-[600px] overflow-y-auto scrollbar-custom p-1">
                       {docInfo.pages.map((page) => {
-                        const isSelected = selectedPages.has(page.index)
                         return (
                           <motion.div
                             key={page.index}
@@ -1144,11 +1030,7 @@ export default function Home() {
                               duration: 0.2,
                               delay: Math.min(page.index * 0.02, 0.5),
                             }}
-                            className={`group relative aspect-[3/4] rounded-lg overflow-hidden border-2 bg-muted cursor-pointer transition-colors ${
-                              isSelected
-                                ? 'border-primary'
-                                : 'border-border hover:border-primary/40'
-                            }`}
+                            className="group relative aspect-[3/4] rounded-lg overflow-hidden border-2 border-border hover:border-primary/40 bg-muted cursor-pointer transition-colors"
                             onClick={() => setPreviewPage(page)}
                           >
                             <img
@@ -1157,22 +1039,6 @@ export default function Home() {
                               className="h-full w-full object-contain transition-transform group-hover:scale-105"
                               loading="lazy"
                             />
-                            {/* Selection checkbox */}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                togglePageSelection(page.index)
-                              }}
-                              className={`absolute top-2 left-2 h-6 w-6 rounded-md flex items-center justify-center transition-all ${
-                                isSelected
-                                  ? 'bg-primary text-primary-foreground opacity-100'
-                                  : 'bg-black/40 text-white opacity-0 group-hover:opacity-100'
-                              }`}
-                              aria-label="Select page"
-                            >
-                              {isSelected && <Check className="h-3.5 w-3.5" />}
-                            </button>
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex flex-col items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
                               <span className="text-white text-xs font-medium bg-black/50 px-2 py-0.5 rounded">
                                 Page {page.index + 1}
@@ -1669,54 +1535,5 @@ export default function Home() {
         )}
       </AnimatePresence>
     </div>
-  )
-}
-
-// ---------- Stat Card Component ----------
-interface StatCardProps {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  value: number
-  displayValue?: string
-  sublabel: string
-  color: 'primary' | 'chart-1' | 'chart-2' | 'chart-4'
-}
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  displayValue,
-  sublabel,
-  color,
-}: StatCardProps) {
-  const colorMap = {
-    primary: 'bg-primary/10 text-primary',
-    'chart-1': 'bg-orange-500/10 text-orange-600 dark:text-orange-400',
-    'chart-2': 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
-    'chart-4': 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
-  }
-
-  return (
-    <Card className="border-border/60 overflow-hidden relative group hover:shadow-md transition-shadow">
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between mb-2">
-          <span className="text-xs font-medium text-muted-foreground">{label}</span>
-          <div
-            className={`flex h-8 w-8 items-center justify-center rounded-lg ${colorMap[color]}`}
-          >
-            <Icon className="h-4 w-4" />
-          </div>
-        </div>
-        <div className="text-2xl font-bold tracking-tight tabular-nums">
-          {displayValue ? (
-            <span>{displayValue}</span>
-          ) : (
-            <AnimatedCounter value={value} />
-          )}
-        </div>
-        <p className="text-[10px] text-muted-foreground mt-1">{sublabel}</p>
-      </CardContent>
-    </Card>
   )
 }
