@@ -153,6 +153,7 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = React.useState('')
   const [favoritesOnly, setFavoritesOnly] = React.useState(false)
   const [showShortcuts, setShowShortcuts] = React.useState(false)
+  const [showGuide, setShowGuide] = React.useState(false)
   const [extracting, setExtracting] = React.useState(false)
   const [needsBrowserExtract, setNeedsBrowserExtract] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -255,10 +256,10 @@ export default function Home() {
   }, [])
 
   // Generate the bookmarklet href — works on desktop AND mobile
-  // MUST be clicked on a Scribd page (not our app). Detects this and alerts.
+  // Opens our app in a NEW tab (doesn't replace the Scribd page)
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:void((function(){try{if(location.href.indexOf('scribd.com')===-1){alert('\\u26a0\\ufe0f You are not on a Scribd page!\\n\\nOpen a Scribd document first, THEN click the Extract Scribd bookmark.\\n\\nCurrent page: '+location.href);return}var h=document.documentElement.outerHTML;if(h.indexOf('contentUrl')===-1&&h.indexOf('scribdassets')===-1){alert('\\u26a0\\ufe0f Scribd page not fully loaded yet.\\n\\nWait 3 seconds for the page to finish loading, then click the bookmark again.');return}var d=JSON.stringify({html:h,title:document.title,url:location.href});document.title='\\u23f3 Extracting...';var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',true);x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){location.href='${origin}/?extract_id='+r.extractId}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){alert('Network error. Please check your connection and try again.')};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
+    const code = `javascript:void((function(){try{if(location.href.indexOf('scribd.com')===-1){alert('Open a Scribd document page first, then click Extract Scribd.');return}var h=document.documentElement.outerHTML;if(h.indexOf('contentUrl')===-1&&h.indexOf('scribdassets')===-1){alert('Page not fully loaded. Wait 3 seconds and try again.');return}var d=JSON.stringify({html:h,title:document.title,url:location.href});var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',true);x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){window.open('${origin}/?extract_id='+r.extractId,'_blank')}else{alert('Error: '+(r.error||'unknown'))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){alert('Network error.')};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
     return code
   }, [])
 
@@ -344,6 +345,7 @@ export default function Home() {
       if (data.needsBrowserExtract) {
         setNeedsBrowserExtract(true)
         setDocInfo(null)
+        setShowGuide(true)
         setLoading(false)
         return
       }
@@ -1852,6 +1854,103 @@ export default function Home() {
                   className="w-auto h-auto max-w-full max-h-[80vh] mx-auto"
                 />
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* How to Download Guide Modal */}
+      <AnimatePresence>
+        {showGuide && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={() => setShowGuide(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="relative max-w-md w-full"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Card className="shadow-2xl">
+                <CardContent className="p-6">
+                  <div className="flex items-center justify-between mb-5">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <Download className="h-5 w-5 text-primary" />
+                      How to download
+                    </h3>
+                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setShowGuide(false)}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Step 1 */}
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold shrink-0">1</span>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium mb-2">Drag this button to your bookmarks bar:</p>
+                        <span
+                          dangerouslySetInnerHTML={{
+                            __html: `<a href="${bookmarkletHref}" class="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-semibold cursor-grab hover:opacity-90 active:cursor-grabbing transition-opacity shadow-sm"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>Extract Scribd</a>`,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Step 2 */}
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold shrink-0">2</span>
+                      <div>
+                        <p className="text-sm font-medium">Open any Scribd document page</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Go to scribd.com and open the document you want to download</p>
+                      </div>
+                    </div>
+
+                    {/* Step 3 */}
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-bold shrink-0">3</span>
+                      <div>
+                        <p className="text-sm font-medium">Click "Extract Scribd" from your bookmarks bar</p>
+                        {isMobile ? (
+                          <div className="mt-2 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                            <p className="text-xs text-blue-700 dark:text-blue-400 font-medium mb-1">📱 On mobile:</p>
+                            <p className="text-xs text-blue-700/80 dark:text-blue-400/80">
+                              1. Save the bookmark (name it <strong>"extract"</strong>)<br/>
+                              2. On the Scribd page, <strong>tap the address bar</strong><br/>
+                              3. Type <strong>"extract"</strong> → tap the suggestion<br/>
+                              4. The code runs and opens a new tab with the download!
+                            </p>
+                            <p className="text-[10px] text-blue-700/60 dark:text-blue-400/60 mt-1.5">
+                              (Mobile browsers block JavaScript from the bookmarks menu — use the address bar instead)
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-muted-foreground mt-0.5">A new tab opens with the download ready — your Scribd page stays open!</p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-3">
+                      <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        You'll get a new tab with download buttons. No URL pasting needed!
+                      </p>
+                    </div>
+                  </div>
+
+                  <Button
+                    className="w-full mt-5"
+                    onClick={() => setShowGuide(false)}
+                  >
+                    Got it!
+                  </Button>
+                </CardContent>
+              </Card>
             </motion.div>
           </motion.div>
         )}
