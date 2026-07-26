@@ -906,9 +906,12 @@ export default function Home() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground mb-3">
-                  <strong>📱 Mobile:</strong>{' '}
+                  <strong>📱 Mobile:</strong> Save the bookmark, then on a Scribd page,
+                  <strong> type "extract" in the address bar</strong> and tap the suggestion.
+                  (Mobile browsers block JavaScript bookmarks from the menu — but they run from the address bar!)
+                  {' '}
                   <a href="/mobile-setup.html" target="_blank" className="text-primary underline font-medium">
-                    Tap here for mobile setup
+                    Full mobile guide →
                   </a>
                 </p>
                 <div className="flex items-center gap-3 flex-wrap">
