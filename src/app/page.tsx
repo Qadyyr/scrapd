@@ -879,8 +879,15 @@ export default function Home() {
                   Fastest method — no URL needed!
                 </p>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Drag this button to your bookmarks bar. Then on any Scribd page,
-                  just click it — you'll be redirected here with the download ready.
+                  <strong>Desktop:</strong> Drag the button to your bookmarks bar. Then on any
+                  Scribd page, click it.
+                </p>
+                <p className="text-xs text-muted-foreground mb-3">
+                  <strong>📱 Mobile:</strong>{' '}
+                  <a href="/mobile-setup.html" target="_blank" className="text-primary underline font-medium">
+                    Tap here for mobile setup
+                  </a>{' '}
+                  (iOS Shortcut or Android extension — no bookmarklet needed!)
                 </p>
                 <div className="flex items-center gap-3 flex-wrap">
                   <span

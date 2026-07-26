@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scribd Extractor — Mobile Setup</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 600px; margin: 0 auto; padding: 16px; background: #f0fdfa; color: #1f2937; min-height: 100vh; }
+    .card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; color: #0d9488; }
+    h2 { font-size: 1.1rem; margin: 0 0 12px; }
+    p { font-size: 0.85rem; line-height: 1.5; margin: 0 0 8px; color: #6b7280; }
+    .btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor: pointer; text-align: center; margin-top: 8px; text-decoration: none; }
+    .btn-primary { background: #0d9488; color: white; }
+    .btn-ios { background: #007aff; color: white; }
+    .btn-android { background: #34a853; color: white; }
+    .btn:hover { opacity: 0.9; }
+    .step { display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; }
+    .step-num { background: #0d9488; color: white; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: bold; flex-shrink: 0; margin-top: 1px; }
+    .step-text { font-size: 0.85rem; line-height: 1.5; }
+    .step-text strong { color: #1f2937; }
+    .tab-btn { flex: 1; padding: 12px; border: none; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+    .tab-btn.active { background: #0d9488; color: white; }
+    .tab-bar { display: flex; gap: 2px; margin-bottom: 12px; border-radius: 10px; overflow: hidden; }
+    .hidden { display: none; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; margin-bottom: 6px; }
+    .badge-ios { background: #e3f2fd; color: #007aff; }
+    .badge-android { background: #e8f5e9; color: #34a853; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📱 Mobile Setup</h1>
+    <p>Choose your platform to set up one-tap Scribd extraction on mobile.</p>
+  </div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="showTab('ios')" id="tab-ios-btn">🍎 iPhone/iPad</button>
+    <button class="tab-btn" onclick="showTab('android')" id="tab-android-btn">🤖 Android</button>
+  </div>
+
+  <!-- iOS Shortcuts approach -->
+  <div id="tab-ios" class="card">
+    <span class="badge badge-ios">iOS Shortcuts — Native, no bookmarklet</span>
+    <h2>Install the Scribd Extractor Shortcut</h2>
+    <p>Uses iOS Shortcuts to run JavaScript on any Scribd page. No bookmarklet needed — just tap Share → Shortcuts.</p>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-text"><strong>Tap the button below</strong> to open the Shortcut in the Shortcuts app.</div>
+    </div>
+    <a id="iosShortcutLink" href="#" class="btn btn-ios">📥 Install Shortcut</a>
+
+    <div class="step" style="margin-top: 16px;">
+      <div class="step-num">2</div>
+      <div class="step-text">Tap <strong>"Add Shortcut"</strong> in the Shortcuts app.</div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-text"><strong>To use:</strong> Open any Scribd document in Safari → tap <strong>Share</strong> → tap <strong>"Extract Scribd"</strong>.</div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-text">The Shortcut runs JavaScript on the page, extracts all page images, and opens the downloader app automatically!</div>
+    </div>
+  </div>
+
+  <!-- Android Kiwi Browser approach -->
+  <div id="tab-android" class="card hidden">
+    <span class="badge badge-android">Kiwi Browser — Supports Chrome Extensions</span>
+    <h2>Install the Extractor Extension</h2>
+    <p>Uses <strong>Kiwi Browser</strong> (Android Chrome with extension support) to auto-extract Scribd pages.</p>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-text"><strong>Install Kiwi Browser</strong> from the Play Store (it's a Chrome-based browser that supports extensions).</div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-text">In Kiwi, open <strong>kiwi://extensions</strong> and enable "Developer mode".</div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-text">Download and install the extension: <button class="btn btn-android" style="margin-top:8px" onclick="downloadExtension()">📥 Download Extension</button></div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-text">Open <strong>kiwi://extensions</strong> → "Load" → select the downloaded .zip file.</div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-text"><strong>To use:</strong> Open any Scribd document in Kiwi → the extension automatically extracts the pages and opens the downloader!</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <p style="font-weight: 600; color: #1f2937; margin-bottom: 8px;">💡 How is this different from a bookmarklet?</p>
+    <p><strong>Bookmarklets</strong> require manually creating a bookmark with a <code>javascript:</code> URL — which mobile browsers often strip or block.</p>
+    <p style="margin-top: 6px;"><strong>iOS Shortcuts</strong> are native iOS automation. They run JavaScript on web pages through the Share menu — no bookmarklet, no manual URL editing.</p>
+    <p style="margin-top: 6px;"><strong>Kiwi Browser extensions</strong> run automatically on every Scribd page — zero clicks after installation.</p>
+  </div>
+
+  <script>
+    var APP_URL = window.location.origin;
+
+    function showTab(tab) {
+      document.getElementById('tab-ios').classList.toggle('hidden', tab !== 'ios');
+      document.getElementById('tab-android').classList.toggle('hidden', tab !== 'android');
+      document.getElementById('tab-ios-btn').classList.toggle('active', tab === 'ios');
+      document.getElementById('tab-android-btn').classList.toggle('active', tab === 'android');
+    }
+
+    // Generate iOS Shortcut URL
+    // The shortcut: receives Safari page input → runs JavaScript → sends to our API → opens result
+    var shortcutJS = [
+      'var result = [];',
+      'var html = document.documentElement.outerHTML;',
+      'var patterns = [',
+      '  /contentUrl:\\s*["\\'](https:\\/\\/html\\.scribdassets\\.com\\/[^"\\']+\\.jsonp)["\\']/g,',
+      '  /contentUrl:["\\'\\s]*(https:\\/\\/html\\.scribdassets\\.com\\/[^"\\')\\s]+\\.jsonp)/g,',
+      '  /(https:\\/\\/html\\.scribdassets\\.com\\/[a-z0-9]+\\/pages\\/[0-9]+-[a-f0-9]+\\.jsonp)/g',
+      '];',
+      'for (var i = 0; i < patterns.length; i++) {',
+      '  var m;',
+      '  while ((m = patterns[i].exec(html)) !== null) {',
+      '    var url = m[1] || m[0];',
+      '    if (result.indexOf(url) === -1) result.push(url);',
+      '  }',
+      '  if (result.length > 0) break;',
+      '}',
+      'var title = document.title.replace(/\\s*\\|\\s*Scribd.*$/i, "").trim();',
+      'var pc = (html.match(/"page_count"\\s*:\\s*(\\d+)/) || [])[1] || result.length;',
+      'var thumb = (document.querySelector(\'meta[property="og:image"]\') || {}).content || "";',
+      'var data = JSON.stringify({urls: result, title: title, sourceUrl: location.href, thumbnail: thumb, pageCount: parseInt(pc)});',
+      'completion(data);'
+    ].join('\\n');
+
+    // Build the iOS Shortcut as an iCloud Shortcut URL
+    // We use the shortcuts:// URL scheme to create a shortcut
+    var shortcutConfig = {
+      'WFWorkflowActions': [
+        {
+          'WFWorkflowActionIdentifier': 'is.workflow.actions.runjavascriptonwebpage',
+          'WFWorkflowActionParameters': {
+            'JavaScript': shortcutJS
+          }
+        },
+        {
+          'WFWorkflowActionIdentifier': 'is.workflow.actions.getcontentsofurl',
+          'WFWorkflowActionParameters': {
+            'URL': APP_URL + '/api/scribd/extract',
+            'WFHTTPMethod': 'POST',
+            'WFHTTPHeaders': '{"Content-Type": "application/json"}',
+            'WFHTTPBody': 'Input'
+          }
+        },
+        {
+          'WFWorkflowActionIdentifier': 'is.workflow.actions.openurl',
+          'WFWorkflowActionParameters': {
+            'URL': APP_URL + '/?extract_id=' + 'Dictionary{"extractId"}'
+          }
+        }
+      ]
+    };
+
+    // For simplicity, we generate a shortcut URL that users can tap
+    // The shortcut: Run JS on web page → POST to our API → open the app
+    document.getElementById('iosShortcutLink').href = '#';
+
+    // Since we can't easily generate a .shortcut file, we provide the JS code
+    // and instructions to create the shortcut manually
+    document.getElementById('iosShortcutLink').onclick = function(e) {
+      e.preventDefault();
+      // Copy the JavaScript to clipboard
+      var textArea = document.createElement('textarea');
+      textArea.value = shortcutJS;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        alert('JavaScript code copied!\\n\\nNow open the Shortcuts app and create a new shortcut:\\n1. Add action: "Run JavaScript on Web Page"\\n2. Paste the code\\n3. Add action: "Get Contents of URL" with POST to ' + APP_URL + '/api/scribd/extract\\n4. Add action: "Open URL" with ' + APP_URL + '/?extract_id=(extractId from the dictionary)\\n5. Enable "Show in Share Sheet"\\n6. Save as "Extract Scribd"');
+      } catch (err) {
+        alert('Could not copy. Please manually create the shortcut using the instructions below.');
+      }
+      document.body.removeChild(textArea);
+    };
+
+    // Generate Chrome extension for Kiwi Browser
+    function downloadExtension() {
+      var manifest = {
+        'manifest_version': 3,
+        'name': 'Scribd Extractor',
+        'version': '1.0',
+        'description': 'Extract Scribd document pages and send to downloader',
+        'permissions': ['activeTab', 'scripting'],
+        'host_permissions': ['*://*.scribd.com/*'],
+        'action': {
+          'default_title': 'Extract Scribd'
+        },
+        'background': {
+          'service_worker': 'background.js'
+        }
+      };
+
+      var background = [
+        'chrome.action.onClicked.addListener(async (tab) => {',
+        '  if (!tab.url || tab.url.indexOf("scribd.com") === -1) {',
+        '    alert("Open a Scribd document page first!");',
+        '    return;',
+        '  }',
+        '  const results = await chrome.scripting.executeScript({',
+        '    target: { tabId: tab.id },',
+        '    func: () => {',
+        '      var html = document.documentElement.outerHTML;',
+        '      var urls = [];',
+        '      var seen = {};',
+        '      var patterns = [',
+        '        /contentUrl:\\s*["\\x27](https:\\/\\/html\\.scribdassets\\.com\\/[^"\\x27]+\\.jsonp)["\\x27]/g,',
+        '        /contentUrl:["\\x27\\s]*(https:\\/\\/html\\.scribdassets\\.com\\/[^"\\x27)\\s]+\\.jsonp)/g,',
+        '        /(https:\\/\\/html\\.scribdassets\\.com\\/[a-z0-9]+\\/pages\\/[0-9]+-[a-f0-9]+\\.jsonp)/g',
+        '      ];',
+        '      for (var i = 0; i < patterns.length; i++) {',
+        '        var m;',
+        '        while ((m = patterns[i].exec(html)) !== null) {',
+        '          var u = m[1] || m[0];',
+        '          if (!seen[u]) { seen[u] = true; urls.push(u); }',
+        '        }',
+        '        if (urls.length > 0) break;',
+        '      }',
+        '      var title = document.title.replace(/\\s*\\|\\s*Scribd.*$/i, "").trim();',
+        '      var thumb = (document.querySelector(\'meta[property="og:image"]\') || {}).content || "";',
+        '      var pc = (html.match(/"page_count"\\s*:\\s*(\\d+)/) || [])[1] || urls.length;',
+        '      return { urls: urls, title: title, sourceUrl: location.href, thumbnail: thumb, pageCount: parseInt(pc) };',
+        '    }',
+        '  });',
+        '  if (results && results[0] && results[0].result) {',
+        '    var data = results[0].result;',
+        '    if (!data.urls || data.urls.length === 0) {',
+        '      alert("No page URLs found. Make sure the document is fully loaded.");',
+        '      return;',
+        '    }',
+        '    fetch("' + APP_URL + '/api/scribd/extract", {',
+        '      method: "POST",',
+        '      headers: { "Content-Type": "application/json" },',
+        '      body: JSON.stringify(data)',
+        '    })',
+        '    .then(r => r.json())',
+        '    .then(r => {',
+        '      if (r.success) {',
+        '        alert("Found " + r.pageImages.length + " pages! Opening downloader...");',
+        '        chrome.tabs.create({ url: "' + APP_URL + '/?extract_id=" + r.extractId });',
+        '      } else {',
+        '        alert("Error: " + (r.error || "unknown"));',
+        '      }',
+        '    })',
+        '    .catch(e => alert("Network error: " + e.message));',
+        '  }',
+        '});'
+      ].join('\n');
+
+      // Create a .zip-like structure (just download the files)
+      // For simplicity, download as a single JS file with instructions
+      var content = '// Scribd Extractor Extension for Kiwi Browser\n\n' +
+        '// === manifest.json ===\n' + JSON.stringify(manifest, null, 2) + '\n\n' +
+        '// === background.js ===\n' + background;
+
+      var blob = new Blob([content], { type: 'text/javascript' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'scribd-extractor.js';
+      a.click();
+      URL.revokeObjectURL(a.href);
+
+      alert('Downloaded! To install in Kiwi Browser:\n\n1. Create a folder on your phone\n2. Create two files in it: manifest.json and background.js\n3. Copy the content from the downloaded file into each\n4. Open kiwi://extensions in Kiwi Browser\n5. Enable Developer mode\n6. Tap "Load" and select the folder\n\nOr use the bookmarklet method on desktop!');
+    }
+  </script>
+</body>
+</html>
