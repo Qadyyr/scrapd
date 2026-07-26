@@ -252,11 +252,10 @@ export default function Home() {
   }, [])
 
   // Generate the bookmarklet href — works on desktop AND mobile
-  // Uses ASYNC XHR (mobile browsers block synchronous XHR)
-  // Redirects via location.href in the onload callback (works in async, unlike window.open)
+  // MUST be clicked on a Scribd page (not our app). Detects this and alerts.
   const bookmarkletHref = React.useMemo(() => {
     const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const code = `javascript:void((function(){try{var h=document.documentElement.outerHTML;var d=JSON.stringify({html:h,title:document.title,url:location.href});document.title='\\u23f3 Extracting...';var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',true);x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){location.href='${origin}/?extract_id='+r.extractId}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){alert('Network error. Please check your connection and try again.')};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
+    const code = `javascript:void((function(){try{if(location.href.indexOf('scribd.com')===-1){alert('\\u26a0\\ufe0f You are not on a Scribd page!\\n\\nOpen a Scribd document first, THEN click the Extract Scribd bookmark.\\n\\nCurrent page: '+location.href);return}var h=document.documentElement.outerHTML;if(h.indexOf('contentUrl')===-1&&h.indexOf('scribdassets')===-1){alert('\\u26a0\\ufe0f Scribd page not fully loaded yet.\\n\\nWait 3 seconds for the page to finish loading, then click the bookmark again.');return}var d=JSON.stringify({html:h,title:document.title,url:location.href});document.title='\\u23f3 Extracting...';var x=new XMLHttpRequest();x.open('POST','${origin}/api/scribd/extract-full',true);x.setRequestHeader('Content-Type','application/json');x.onload=function(){try{var r=JSON.parse(x.responseText);if(r.success&&r.extractId){location.href='${origin}/?extract_id='+r.extractId}else{alert('Error: '+(r.error||'unknown')+(r.debug?('\\n\\nDebug: '+JSON.stringify(r.debug)):''))}}catch(e){alert('Parse error: '+e.message)}};x.onerror=function(){alert('Network error. Please check your connection and try again.')};x.send(d)}catch(e){alert('Error: '+e.message)}})())`
     return code
   }, [])
 
@@ -876,18 +875,41 @@ export default function Home() {
               <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-left">
                 <p className="text-sm font-semibold mb-2 flex items-center gap-1.5">
                   <Zap className="h-4 w-4 text-primary" />
-                  Fastest method — no URL needed!
+                  How to download any Scribd document:
                 </p>
-                <p className="text-xs text-muted-foreground mb-3">
-                  <strong>Desktop:</strong> Drag the button to your bookmarks bar. Then on any
-                  Scribd page, click it.
-                </p>
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-3">
+                  <p className="text-xs text-amber-700 dark:text-amber-400 font-medium">
+                    ⚠️ Important: Click the bookmarklet ON the Scribd page, NOT here!
+                  </p>
+                  <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-1">
+                    The bookmarklet must run on scribd.com to extract the document.
+                  </p>
+                </div>
+                <div className="space-y-2 mb-3">
+                  <div className="flex items-start gap-2">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0 mt-0.5">1</span>
+                    <p className="text-xs text-muted-foreground">
+                      <strong>Drag</strong> the "Extract Scribd" button to your bookmarks bar (one-time)
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0 mt-0.5">2</span>
+                    <p className="text-xs text-muted-foreground">
+                      <strong>Open a Scribd document</strong> — go to scribd.com, open any document
+                    </p>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0 mt-0.5">3</span>
+                    <p className="text-xs text-muted-foreground">
+                      <strong>Click "Extract Scribd"</strong> from your bookmarks bar — you'll be redirected here with the download ready!
+                    </p>
+                  </div>
+                </div>
                 <p className="text-xs text-muted-foreground mb-3">
                   <strong>📱 Mobile:</strong>{' '}
                   <a href="/mobile-setup.html" target="_blank" className="text-primary underline font-medium">
                     Tap here for mobile setup
-                  </a>{' '}
-                  (iOS Shortcut or Android extension — no bookmarklet needed!)
+                  </a>
                 </p>
                 <div className="flex items-center gap-3 flex-wrap">
                   <span
