@@ -440,14 +440,29 @@ async function generateImagePdf(
 
       if (result.status === 'fulfilled' && result.value) {
         const img = result.value
-        const pdfPage = pdfDoc.addPage([img.width, img.height])
+        // ALWAYS use Scribd's standard page dimensions (902x1274)
+        // The downloaded image may be smaller (just a diagram fragment)
+        // so we draw it at the top-left of the full page
+        const pageW = 902
+        const pageH = 1274
+        const pdfPage = pdfDoc.addPage([pageW, pageH])
 
-        // Draw the image (diagram/table layer) as background
-        pdfPage.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height })
+        // White background
+        pdfPage.drawRectangle({
+          x: 0, y: 0, width: pageW, height: pageH,
+          color: rgb(1, 1, 1),
+        })
 
-        // Overlay positioned text spans on top (text layer)
+        // Draw the image (diagram/table fragment) at top-left corner
+        pdfPage.drawImage(img, {
+          x: 0, y: pageH - img.height,
+          width: img.width,
+          height: img.height,
+        })
+
+        // Overlay positioned text spans (no scaling needed — 1:1 with page)
         if (spans && spans.length > 0) {
-          drawSpansOverlay(pdfPage, img.width, img.height, spans, font, boldFont)
+          drawSpansOverlay(pdfPage, pageW, pageH, spans, font, boldFont)
         }
       } else {
         // Image failed (403) — text-only page
@@ -465,11 +480,8 @@ async function generateImagePdf(
 }
 
 /**
- * Draw positioned text spans on top of an image page.
- * Each span is rendered individually at its exact (left, top) position
- * with its original font size and color.
- *
- * This faithfully reproduces the text layer that Scribd renders in the browser.
+ * Draw positioned text spans on a page.
+ * Page is always 902x1274px (Scribd standard). Text coordinates are 1:1.
  */
 function drawSpansOverlay(
   page: PDFPage,
@@ -479,20 +491,15 @@ function drawSpansOverlay(
   font: PDFFont,
   boldFont: PDFFont
 ) {
-  // Scribd page is 902x1274px. The image may be a different size.
-  // Calculate scale to map Scribd coordinates → image coordinates.
-  const scaleX = pageWidth / 902
-  const scaleY = pageHeight / 1274
-
   for (const span of spans) {
     const safeText = sanitizeForWinAnsi(span.text)
     if (!safeText || safeText.trim().length === 0) continue
 
-    // Scale positions to match image dimensions
-    const x = span.left * scaleX
+    // 1:1 coordinates — no scaling (page is 902x1274, spans are in same coordinate space)
+    const x = span.left
     // Convert top-down (Scribd) to bottom-up (pdf-lib)
-    const y = pageHeight - (span.top * scaleY) - (span.fontSize * scaleY)
-    const fontSize = Math.max(6, span.fontSize * Math.min(scaleX, scaleY))
+    const y = pageHeight - span.top - span.fontSize
+    const fontSize = Math.max(6, span.fontSize)
 
     // Parse color (#RRGGBB → rgb values)
     const color = hexToRgb(span.color)
