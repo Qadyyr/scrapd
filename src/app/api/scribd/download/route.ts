@@ -390,7 +390,8 @@ async function generateImagePdf(
   pages: DownloadPage[],
   meta?: { title?: string; author?: string | null },
   onProgress?: (done: number, total: number) => void,
-  pageTexts?: string[]
+  pageTexts?: string[],
+  pageLines?: Array<Array<{ text: string; left: number; top: number; fontSize: number }>>
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
   if (meta?.title) pdfDoc.setTitle(sanitizeForWinAnsi(meta.title))
@@ -398,16 +399,13 @@ async function generateImagePdf(
   pdfDoc.setCreator('Scribd Downloader')
   pdfDoc.setProducer('Scribd Downloader')
 
-  // Load fonts for text fallback pages
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
 
   const total = pages.length
   let done = 0
-  let imagePages = 0
-  let textPages = 0
 
-  // Fetch and embed images in parallel batches of 10
+  // Process pages in batches for image downloading
   const BATCH_SIZE = 10
   for (let i = 0; i < pages.length; i += BATCH_SIZE) {
     const batch = pages.slice(i, i + BATCH_SIZE)
@@ -415,51 +413,37 @@ async function generateImagePdf(
       batch.map(async (page) => {
         const imgBuffer = await fetchImageBuffer(page.url)
         const bytes = new Uint8Array(imgBuffer)
-        const isPng =
-          bytes[0] === 0x89 &&
-          bytes[1] === 0x50 &&
-          bytes[2] === 0x4e &&
-          bytes[3] === 0x47
+        const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
         const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8
-
         let img
-        if (isPng) {
-          img = await pdfDoc.embedPng(bytes)
-        } else if (isJpeg) {
-          img = await pdfDoc.embedJpg(bytes)
-        } else {
-          try {
-            img = await pdfDoc.embedJpg(bytes)
-          } catch {
-            return null
-          }
-        }
+        if (isPng) img = await pdfDoc.embedPng(bytes)
+        else if (isJpeg) img = await pdfDoc.embedJpg(bytes)
+        else { try { img = await pdfDoc.embedJpg(bytes) } catch { return null } }
         return img
       })
     )
 
-    // Add pages in order — image if available, text fallback otherwise
     for (let j = 0; j < results.length; j++) {
       const result = results[j]
       const pageIndex = i + j
+      const lines = pageLines?.[pageIndex]
 
       if (result.status === 'fulfilled' && result.value) {
-        // Image downloaded — add as full page image
         const img = result.value
         const pdfPage = pdfDoc.addPage([img.width, img.height])
-        pdfPage.drawImage(img, {
-          x: 0,
-          y: 0,
-          width: img.width,
-          height: img.height,
-        })
-        imagePages++
+
+        // Draw the image (diagram/table layer) as background
+        pdfPage.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height })
+
+        // Overlay positioned text on top (text layer)
+        if (lines && lines.length > 0) {
+          drawTextOverlay(pdfPage, img.width, img.height, lines, font, boldFont)
+        }
       } else {
-        // Image failed (403) — add a text page with the content
+        // Image failed (403) — text-only page
         const pageText = pageTexts?.[pageIndex]
         if (pageText && pageText.trim().length > 10) {
           addCleanTextPage(pdfDoc, font, boldFont, pageIndex + 1, pageText)
-          textPages++
         }
       }
       done++
@@ -468,6 +452,55 @@ async function generateImagePdf(
   }
 
   return pdfDoc.save()
+}
+
+/**
+ * Draw positioned text on top of an image page.
+ * Scribd pages have two layers:
+ * - image_layer: diagrams, tables, borders (the .jpg we downloaded)
+ * - text_layer: positioned text spans (from the JSONP)
+ *
+ * This function overlays the text layer on top of the image.
+ */
+function drawTextOverlay(
+  page: PDFPage,
+  pageWidth: number,
+  pageHeight: number,
+  lines: Array<{ text: string; left: number; top: number; fontSize: number }>,
+  font: PDFFont,
+  boldFont: PDFFont
+) {
+  // The image dimensions tell us the actual page size in pixels.
+  // Scribd uses pixel coordinates (top-down). pdf-lib uses points (bottom-up).
+  // We scale text positions to match the image dimensions.
+
+  // Determine scale: Scribd page is typically 902x1274px
+  // Image may be different size, so calculate scale ratio
+  const scaleX = pageWidth / 902
+  const scaleY = pageHeight / 1274
+
+  for (const line of lines) {
+    const safeText = sanitizeForWinAnsi(line.text)
+    if (!safeText || safeText.trim().length === 0) continue
+
+    // Scale positions to match the image dimensions
+    const x = line.left * scaleX
+    // Convert top-down to bottom-up
+    const y = pageHeight - (line.top * scaleY) - (line.fontSize * scaleY)
+    const fontSize = Math.max(6, line.fontSize * Math.min(scaleX, scaleY))
+
+    const isBold = /^\d+[\.\)]/.test(safeText.trim()) || /^[a-z]\.\s/i.test(safeText.trim())
+    const useFont = isBold ? boldFont : font
+
+    try {
+      page.drawText(safeText, {
+        x, y, size: fontSize, font: useFont,
+        color: rgb(0.05, 0.05, 0.05),
+      })
+    } catch {
+      // skip unencodable
+    }
+  }
 }
 
 /**
@@ -595,6 +628,7 @@ export async function POST(req: NextRequest) {
       pageImages,
       isScanned,
       pageTexts,
+      pageLines,
     }: {
       docId: string
       title: string
@@ -607,6 +641,7 @@ export async function POST(req: NextRequest) {
       pageImages?: string[]
       isScanned?: boolean
       pageTexts?: string[]
+      pageLines?: Array<Array<{ text: string; left: number; top: number; fontSize: number }>>
     } = body
 
     let pdfBytes: Uint8Array
@@ -627,7 +662,8 @@ export async function POST(req: NextRequest) {
           author: author || null,
         },
         undefined,
-        pageTexts
+        pageTexts,
+        pageLines
       )
       actualPageCount = imagePages.length
       isTextPdf = false

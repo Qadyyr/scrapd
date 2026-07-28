@@ -107,8 +107,11 @@ export async function POST(req: NextRequest) {
         .replace('html.scribdassets.com', 'html.scribd.com')
     })
 
-    // Fetch text content from JSONP files (for 403 image pages — text fallback)
+    // Fetch text content AND positioned lines from JSONP files
+    // Scribd pages have two layers: image (diagrams/tables) + text (positioned spans)
+    // We need the text layer to overlay on top of the image layer
     const pageTexts: string[] = []
+    const pageLines: Array<Array<{ text: string; left: number; top: number; fontSize: number }>> = []
     try {
       const textResults = await Promise.allSettled(
         urls.slice(0, 50).map(async (jsonpUrl) => {
@@ -116,18 +119,78 @@ export async function POST(req: NextRequest) {
             headers: { Referer: 'https://www.scribd.com/' },
             signal: AbortSignal.timeout(8000),
           })
-          if (!res.ok) return ''
+          if (!res.ok) return { text: '', lines: [] as Array<{ text: string; left: number; top: number; fontSize: number }> }
           const raw = await res.text()
           const clean = raw.replace(/\\"/g, '"')
+
+          // Extract plain text
           const spans = clean.match(/<span class=a[^>]*>([^<]*)<\/span>/g) || []
           const texts = spans
             .map((s) => s.replace(/<[^>]+>/g, '').replace(/\xa0/g, ' ').trim())
             .filter((t) => t.length > 0)
-          return texts.join(' ')
+          const plainText = texts.join(' ')
+
+          // Extract positioned spans and group into lines
+          const posSpans = clean.match(/<span class=a style="([^"]*)">([^<]*)<\/span>/g) || []
+          const positions: Array<{ text: string; left: number; top: number; fontSize: number }> = []
+          for (const spanHtml of posSpans) {
+            const styleMatch = spanHtml.match(/style="([^"]*)"/)
+            const textMatch = spanHtml.match(/>([^<]*)</)
+            if (!styleMatch || !textMatch) continue
+            const style = styleMatch[1]
+            const text = textMatch[1].replace(/\xa0/g, ' ').trim()
+            if (!text) continue
+            const leftMatch = style.match(/left:\s*(-?\d+(?:\.\d+)?)px/)
+            const topMatch = style.match(/top:\s*(-?\d+(?:\.\d+)?)px/)
+            const fontSizeMatch = style.match(/font-size:\s*(\d+)px/)
+            if (leftMatch && topMatch) {
+              positions.push({
+                text,
+                left: parseFloat(leftMatch[1]),
+                top: parseFloat(topMatch[1]),
+                fontSize: fontSizeMatch ? parseInt(fontSizeMatch[1]) : 20,
+              })
+            }
+          }
+
+          // Sort by (top, left) and group into lines
+          positions.sort((a, b) => a.top - b.top || a.left - b.left)
+          const lines: Array<{ text: string; left: number; top: number; fontSize: number }> = []
+          let currentLine: typeof positions = []
+          let currentTop = -9999
+          for (const pos of positions) {
+            if (Math.abs(pos.top - currentTop) > 15 && currentLine.length > 0) {
+              lines.push({
+                text: currentLine.map((p) => p.text).join(' '),
+                left: currentLine[0].left,
+                top: currentLine[0].top,
+                fontSize: currentLine[0].fontSize,
+              })
+              currentLine = []
+            }
+            currentLine.push(pos)
+            currentTop = pos.top
+          }
+          if (currentLine.length > 0) {
+            lines.push({
+              text: currentLine.map((p) => p.text).join(' '),
+              left: currentLine[0].left,
+              top: currentLine[0].top,
+              fontSize: currentLine[0].fontSize,
+            })
+          }
+
+          return { text: plainText, lines }
         })
       )
       for (const result of textResults) {
-        pageTexts.push(result.status === 'fulfilled' ? (result.value || '') : '')
+        if (result.status === 'fulfilled') {
+          pageTexts.push(result.value.text || '')
+          pageLines.push(result.value.lines || [])
+        } else {
+          pageTexts.push('')
+          pageLines.push([])
+        }
       }
     } catch {
       // silent
@@ -157,6 +220,7 @@ export async function POST(req: NextRequest) {
       pages: pageImages.map((url, i) => ({ index: i, url })),
       pageImages,
       pageTexts: pageTexts.length > 0 ? pageTexts : undefined,
+      pageLines: pageLines.length > 0 ? pageLines : undefined,
       textContent: textContent || undefined,
       isScanned: true,
       isDemo: false,
