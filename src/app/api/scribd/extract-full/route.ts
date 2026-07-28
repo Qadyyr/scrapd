@@ -107,11 +107,11 @@ export async function POST(req: NextRequest) {
         .replace('html.scribdassets.com', 'html.scribd.com')
     })
 
-    // Fetch text content AND positioned lines from JSONP files
-    // Scribd pages have two layers: image (diagrams/tables) + text (positioned spans)
-    // We need the text layer to overlay on top of the image layer
+    // Fetch text content AND positioned spans from JSONP files
+    // Each span has: left, top, fontSize, color, wordSpacing, letterSpacing
+    // We preserve ALL styling for faithful rendering
     const pageTexts: string[] = []
-    const pageLines: Array<Array<{ text: string; left: number; top: number; fontSize: number }>> = []
+    const pageSpans: Array<Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }>> = []
     try {
       const textResults = await Promise.allSettled(
         urls.slice(0, 50).map(async (jsonpUrl) => {
@@ -119,7 +119,7 @@ export async function POST(req: NextRequest) {
             headers: { Referer: 'https://www.scribd.com/' },
             signal: AbortSignal.timeout(8000),
           })
-          if (!res.ok) return { text: '', lines: [] as Array<{ text: string; left: number; top: number; fontSize: number }> }
+          if (!res.ok) return { text: '', spans: [] as Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }> }
           const raw = await res.text()
           const clean = raw.replace(/\\"/g, '"')
 
@@ -130,9 +130,9 @@ export async function POST(req: NextRequest) {
             .filter((t) => t.length > 0)
           const plainText = texts.join(' ')
 
-          // Extract positioned spans and group into lines
+          // Extract positioned spans with ALL style attributes
           const posSpans = clean.match(/<span class=a style="([^"]*)">([^<]*)<\/span>/g) || []
-          const positions: Array<{ text: string; left: number; top: number; fontSize: number }> = []
+          const positions: Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }> = []
           for (const spanHtml of posSpans) {
             const styleMatch = spanHtml.match(/style="([^"]*)"/)
             const textMatch = spanHtml.match(/>([^<]*)</)
@@ -142,54 +142,36 @@ export async function POST(req: NextRequest) {
             if (!text) continue
             const leftMatch = style.match(/left:\s*(-?\d+(?:\.\d+)?)px/)
             const topMatch = style.match(/top:\s*(-?\d+(?:\.\d+)?)px/)
-            const fontSizeMatch = style.match(/font-size:\s*(\d+)px/)
+            const fsMatch = style.match(/font-size:\s*(\d+)px/)
+            const colorMatch = style.match(/color:\s*(#[0-9a-fA-F]{3,6})/)
+            const wsMatch = style.match(/word-spacing:\s*(-?\d+)px/)
+            const lsMatch = style.match(/letter-spacing:\s*(-?\d+)px/)
             if (leftMatch && topMatch) {
               positions.push({
                 text,
                 left: parseFloat(leftMatch[1]),
                 top: parseFloat(topMatch[1]),
-                fontSize: fontSizeMatch ? parseInt(fontSizeMatch[1]) : 20,
+                fontSize: fsMatch ? parseInt(fsMatch[1]) : 20,
+                color: colorMatch ? colorMatch[1] : '#000000',
+                wordSpacing: wsMatch ? parseInt(wsMatch[1]) : 0,
+                letterSpacing: lsMatch ? parseInt(lsMatch[1]) : 0,
               })
             }
           }
 
-          // Sort by (top, left) and group into lines
+          // Sort by (top, left) for reading order
           positions.sort((a, b) => a.top - b.top || a.left - b.left)
-          const lines: Array<{ text: string; left: number; top: number; fontSize: number }> = []
-          let currentLine: typeof positions = []
-          let currentTop = -9999
-          for (const pos of positions) {
-            if (Math.abs(pos.top - currentTop) > 15 && currentLine.length > 0) {
-              lines.push({
-                text: currentLine.map((p) => p.text).join(' '),
-                left: currentLine[0].left,
-                top: currentLine[0].top,
-                fontSize: currentLine[0].fontSize,
-              })
-              currentLine = []
-            }
-            currentLine.push(pos)
-            currentTop = pos.top
-          }
-          if (currentLine.length > 0) {
-            lines.push({
-              text: currentLine.map((p) => p.text).join(' '),
-              left: currentLine[0].left,
-              top: currentLine[0].top,
-              fontSize: currentLine[0].fontSize,
-            })
-          }
 
-          return { text: plainText, lines }
+          return { text: plainText, spans: positions }
         })
       )
       for (const result of textResults) {
         if (result.status === 'fulfilled') {
           pageTexts.push(result.value.text || '')
-          pageLines.push(result.value.lines || [])
+          pageSpans.push(result.value.spans || [])
         } else {
           pageTexts.push('')
-          pageLines.push([])
+          pageSpans.push([])
         }
       }
     } catch {
@@ -220,7 +202,7 @@ export async function POST(req: NextRequest) {
       pages: pageImages.map((url, i) => ({ index: i, url })),
       pageImages,
       pageTexts: pageTexts.length > 0 ? pageTexts : undefined,
-      pageLines: pageLines.length > 0 ? pageLines : undefined,
+      pageSpans: pageSpans.length > 0 ? pageSpans : undefined,
       textContent: textContent || undefined,
       isScanned: true,
       isDemo: false,

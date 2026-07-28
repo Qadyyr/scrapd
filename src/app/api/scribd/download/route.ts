@@ -386,12 +386,22 @@ async function generateTextPdf(params: {
  * Images are fetched in parallel batches (5 at a time) for speed, and
  * a progress callback reports how many pages have been processed.
  */
+interface PositionedSpan {
+  text: string
+  left: number
+  top: number
+  fontSize: number
+  color: string
+  wordSpacing: number
+  letterSpacing: number
+}
+
 async function generateImagePdf(
   pages: DownloadPage[],
   meta?: { title?: string; author?: string | null },
   onProgress?: (done: number, total: number) => void,
   pageTexts?: string[],
-  pageLines?: Array<Array<{ text: string; left: number; top: number; fontSize: number }>>
+  pageSpans?: Array<PositionedSpan[]>
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
   if (meta?.title) pdfDoc.setTitle(sanitizeForWinAnsi(meta.title))
@@ -426,7 +436,7 @@ async function generateImagePdf(
     for (let j = 0; j < results.length; j++) {
       const result = results[j]
       const pageIndex = i + j
-      const lines = pageLines?.[pageIndex]
+      const spans = pageSpans?.[pageIndex]
 
       if (result.status === 'fulfilled' && result.value) {
         const img = result.value
@@ -435,9 +445,9 @@ async function generateImagePdf(
         // Draw the image (diagram/table layer) as background
         pdfPage.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height })
 
-        // Overlay positioned text on top (text layer)
-        if (lines && lines.length > 0) {
-          drawTextOverlay(pdfPage, img.width, img.height, lines, font, boldFont)
+        // Overlay positioned text spans on top (text layer)
+        if (spans && spans.length > 0) {
+          drawSpansOverlay(pdfPage, img.width, img.height, spans, font, boldFont)
         }
       } else {
         // Image failed (403) — text-only page
@@ -455,52 +465,69 @@ async function generateImagePdf(
 }
 
 /**
- * Draw positioned text on top of an image page.
- * Scribd pages have two layers:
- * - image_layer: diagrams, tables, borders (the .jpg we downloaded)
- * - text_layer: positioned text spans (from the JSONP)
+ * Draw positioned text spans on top of an image page.
+ * Each span is rendered individually at its exact (left, top) position
+ * with its original font size and color.
  *
- * This function overlays the text layer on top of the image.
+ * This faithfully reproduces the text layer that Scribd renders in the browser.
  */
-function drawTextOverlay(
+function drawSpansOverlay(
   page: PDFPage,
   pageWidth: number,
   pageHeight: number,
-  lines: Array<{ text: string; left: number; top: number; fontSize: number }>,
+  spans: PositionedSpan[],
   font: PDFFont,
   boldFont: PDFFont
 ) {
-  // The image dimensions tell us the actual page size in pixels.
-  // Scribd uses pixel coordinates (top-down). pdf-lib uses points (bottom-up).
-  // We scale text positions to match the image dimensions.
-
-  // Determine scale: Scribd page is typically 902x1274px
-  // Image may be different size, so calculate scale ratio
+  // Scribd page is 902x1274px. The image may be a different size.
+  // Calculate scale to map Scribd coordinates → image coordinates.
   const scaleX = pageWidth / 902
   const scaleY = pageHeight / 1274
 
-  for (const line of lines) {
-    const safeText = sanitizeForWinAnsi(line.text)
+  for (const span of spans) {
+    const safeText = sanitizeForWinAnsi(span.text)
     if (!safeText || safeText.trim().length === 0) continue
 
-    // Scale positions to match the image dimensions
-    const x = line.left * scaleX
-    // Convert top-down to bottom-up
-    const y = pageHeight - (line.top * scaleY) - (line.fontSize * scaleY)
-    const fontSize = Math.max(6, line.fontSize * Math.min(scaleX, scaleY))
+    // Scale positions to match image dimensions
+    const x = span.left * scaleX
+    // Convert top-down (Scribd) to bottom-up (pdf-lib)
+    const y = pageHeight - (span.top * scaleY) - (span.fontSize * scaleY)
+    const fontSize = Math.max(6, span.fontSize * Math.min(scaleX, scaleY))
 
+    // Parse color (#RRGGBB → rgb values)
+    const color = hexToRgb(span.color)
+
+    // Detect bold: question numbers, headings
     const isBold = /^\d+[\.\)]/.test(safeText.trim()) || /^[a-z]\.\s/i.test(safeText.trim())
     const useFont = isBold ? boldFont : font
 
     try {
       page.drawText(safeText, {
-        x, y, size: fontSize, font: useFont,
-        color: rgb(0.05, 0.05, 0.05),
+        x,
+        y,
+        size: fontSize,
+        font: useFont,
+        color,
       })
     } catch {
-      // skip unencodable
+      // skip unencodable text
     }
   }
+}
+
+/**
+ * Convert hex color (#RRGGBB) to pdf-lib rgb() values
+ */
+function hexToRgb(hex: string): ReturnType<typeof rgb> {
+  const cleaned = hex.replace('#', '')
+  if (cleaned.length === 6) {
+    const r = parseInt(cleaned.slice(0, 2), 16) / 255
+    const g = parseInt(cleaned.slice(2, 4), 16) / 255
+    const b = parseInt(cleaned.slice(4, 6), 16) / 255
+    return rgb(r, g, b)
+  }
+  // Default: dark grey
+  return rgb(0.05, 0.05, 0.05)
 }
 
 /**
@@ -628,7 +655,7 @@ export async function POST(req: NextRequest) {
       pageImages,
       isScanned,
       pageTexts,
-      pageLines,
+      pageSpans,
     }: {
       docId: string
       title: string
@@ -641,7 +668,7 @@ export async function POST(req: NextRequest) {
       pageImages?: string[]
       isScanned?: boolean
       pageTexts?: string[]
-      pageLines?: Array<Array<{ text: string; left: number; top: number; fontSize: number }>>
+      pageSpans?: Array<Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }>>
     } = body
 
     let pdfBytes: Uint8Array
@@ -663,7 +690,7 @@ export async function POST(req: NextRequest) {
         },
         undefined,
         pageTexts,
-        pageLines
+        pageSpans
       )
       actualPageCount = imagePages.length
       isTextPdf = false
