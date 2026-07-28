@@ -389,7 +389,8 @@ async function generateTextPdf(params: {
 async function generateImagePdf(
   pages: DownloadPage[],
   meta?: { title?: string; author?: string | null },
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
+  pageTexts?: string[]
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
   if (meta?.title) pdfDoc.setTitle(sanitizeForWinAnsi(meta.title))
@@ -397,11 +398,17 @@ async function generateImagePdf(
   pdfDoc.setCreator('Scribd Downloader')
   pdfDoc.setProducer('Scribd Downloader')
 
+  // Load fonts for text fallback pages
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+
   const total = pages.length
   let done = 0
+  let imagePages = 0
+  let textPages = 0
 
-  // Fetch and embed images in parallel batches of 5 to balance speed vs memory.
-  const BATCH_SIZE = 5
+  // Fetch and embed images in parallel batches of 10
+  const BATCH_SIZE = 10
   for (let i = 0; i < pages.length; i += BATCH_SIZE) {
     const batch = pages.slice(i, i + BATCH_SIZE)
     const results = await Promise.allSettled(
@@ -431,9 +438,13 @@ async function generateImagePdf(
       })
     )
 
-    // Add pages in order (not in completion order) to preserve page sequence
-    for (const result of results) {
+    // Add pages in order — image if available, text fallback otherwise
+    for (let j = 0; j < results.length; j++) {
+      const result = results[j]
+      const pageIndex = i + j
+
       if (result.status === 'fulfilled' && result.value) {
+        // Image downloaded — add as full page image
         const img = result.value
         const pdfPage = pdfDoc.addPage([img.width, img.height])
         pdfPage.drawImage(img, {
@@ -442,6 +453,14 @@ async function generateImagePdf(
           width: img.width,
           height: img.height,
         })
+        imagePages++
+      } else {
+        // Image failed (403) — add a text page with the content
+        const pageText = pageTexts?.[pageIndex]
+        if (pageText && pageText.trim().length > 10) {
+          addCleanTextPage(pdfDoc, font, boldFont, pageIndex + 1, pageText)
+          textPages++
+        }
       }
       done++
       if (onProgress) onProgress(done, total)
@@ -449,6 +468,116 @@ async function generateImagePdf(
   }
 
   return pdfDoc.save()
+}
+
+/**
+ * Add a clean text page for 403 image pages.
+ * Uses the same page dimensions as Scribd images (902x1274).
+ * Renders text in clean, readable format — not trying to match exact positions,
+ * just making it readable with proper formatting.
+ */
+function addCleanTextPage(
+  pdfDoc: PDFDocument,
+  font: PDFFont,
+  boldFont: PDFFont,
+  pageNum: number,
+  text: string
+) {
+  // Match Scribd's page dimensions for consistency
+  const pageWidth = 902
+  const pageHeight = 1274
+  const margin = 60
+  const contentWidth = pageWidth - margin * 2
+
+  const page = pdfDoc.addPage([pageWidth, pageHeight])
+
+  // White background
+  page.drawRectangle({
+    x: 0, y: 0, width: pageWidth, height: pageHeight,
+    color: rgb(1, 1, 1),
+  })
+
+  let y = pageHeight - margin
+
+  // Page number header
+  const headerText = sanitizeForWinAnsi(`Page ${pageNum}`)
+  page.drawText(headerText, {
+    x: margin, y: y, size: 12, font: boldFont, color: rgb(0.4, 0.4, 0.4),
+  })
+  // Header line
+  page.drawLine({
+    start: { x: margin, y: y - 8 },
+    end: { x: pageWidth - margin, y: y - 8 },
+    thickness: 1, color: rgb(0.85, 0.85, 0.85),
+  })
+  y -= 35
+
+  // Process text — split into paragraphs by double newlines or question patterns
+  const safeText = sanitizeForWinAnsi(text)
+  const paragraphs = safeText.split(/\n{2,}|(?=\d+\.\s|[a-z]\.\s)/i).filter((p) => p.trim())
+
+  const fontSize = 13
+  const lineHeight = 20
+  const paragraphSpacing = 10
+
+  for (const paragraph of paragraphs) {
+    const trimmed = paragraph.trim()
+    if (!trimmed) continue
+
+    // Detect headings/questions
+    const isQuestion = /^\d+[\.\)]/.test(trimmed) || /^[a-z]\.\s/i.test(trimmed)
+    const useFont = isQuestion ? boldFont : font
+    const useSize = isQuestion ? 14 : fontSize
+
+    // Word wrap
+    const words = trimmed.split(/\s+/)
+    let line = ''
+    for (const word of words) {
+      const testLine = line ? `${line} ${word}` : word
+      const width = useFont.widthOfTextAtSize(testLine, useSize)
+      if (width > contentWidth && line) {
+        try {
+          page.drawText(line, {
+            x: margin, y: y - useSize, size: useSize, font: useFont,
+            color: rgb(0.1, 0.1, 0.1),
+          })
+        } catch {}
+        y -= lineHeight
+        if (y < margin + 30) {
+          // Page full — add continuation page
+          const newPage = pdfDoc.addPage([pageWidth, pageHeight])
+          newPage.drawRectangle({ x: 0, y: 0, width: pageWidth, height: pageHeight, color: rgb(1, 1, 1) })
+          y = pageHeight - margin
+        }
+        line = word
+      } else {
+        line = testLine
+      }
+    }
+    if (line) {
+      try {
+        page.drawText(line, {
+          x: margin, y: y - useSize, size: useSize, font: useFont,
+          color: rgb(0.1, 0.1, 0.1),
+        })
+      } catch {}
+      y -= lineHeight
+    }
+    y -= paragraphSpacing
+  }
+
+  // Footer
+  const footerY = 35
+  page.drawLine({
+    start: { x: margin, y: footerY + 12 },
+    end: { x: pageWidth - margin, y: footerY + 12 },
+    thickness: 0.5, color: rgb(0.85, 0.85, 0.85),
+  })
+  try {
+    page.drawText(sanitizeForWinAnsi(`Page ${pageNum} — Text extracted by Scribd Downloader`), {
+      x: margin, y: footerY, size: 9, font, color: rgb(0.6, 0.6, 0.6),
+    })
+  } catch {}
 }
 
 export async function POST(req: NextRequest) {
@@ -465,6 +594,7 @@ export async function POST(req: NextRequest) {
       textContent,
       pageImages,
       isScanned,
+      pageTexts,
     }: {
       docId: string
       title: string
@@ -476,6 +606,7 @@ export async function POST(req: NextRequest) {
       textContent?: string
       pageImages?: string[]
       isScanned?: boolean
+      pageTexts?: string[]
     } = body
 
     let pdfBytes: Uint8Array
@@ -495,10 +626,8 @@ export async function POST(req: NextRequest) {
           title: title || 'Scribd Document',
           author: author || null,
         },
-        (done, total) => {
-          // Progress is tracked server-side; for large docs this keeps
-          // the event loop active so the connection doesn't idle-timeout.
-        }
+        undefined,
+        pageTexts
       )
       actualPageCount = imagePages.length
       isTextPdf = false

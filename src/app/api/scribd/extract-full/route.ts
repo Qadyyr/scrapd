@@ -107,6 +107,34 @@ export async function POST(req: NextRequest) {
         .replace('html.scribdassets.com', 'html.scribd.com')
     })
 
+    // Fetch text content from JSONP files (for 403 image pages — text fallback)
+    const pageTexts: string[] = []
+    try {
+      const textResults = await Promise.allSettled(
+        urls.slice(0, 50).map(async (jsonpUrl) => {
+          const res = await fetch(jsonpUrl, {
+            headers: { Referer: 'https://www.scribd.com/' },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!res.ok) return ''
+          const raw = await res.text()
+          const clean = raw.replace(/\\"/g, '"')
+          const spans = clean.match(/<span class=a[^>]*>([^<]*)<\/span>/g) || []
+          const texts = spans
+            .map((s) => s.replace(/<[^>]+>/g, '').replace(/\xa0/g, ' ').trim())
+            .filter((t) => t.length > 0)
+          return texts.join(' ')
+        })
+      )
+      for (const result of textResults) {
+        pageTexts.push(result.status === 'fulfilled' ? (result.value || '') : '')
+      }
+    } catch {
+      // silent
+    }
+
+    const textContent = pageTexts.filter((t) => t.length > 10).join('\n\n---\n\n')
+
     // Extract metadata
     const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]*)"/i)
     const descMatch = html.match(/<meta\s+property="og:description"\s+content="([^"]*)"/i)
@@ -128,6 +156,8 @@ export async function POST(req: NextRequest) {
       thumbnail: thumbMatch?.[1] || pageImages[0] || null,
       pages: pageImages.map((url, i) => ({ index: i, url })),
       pageImages,
+      pageTexts: pageTexts.length > 0 ? pageTexts : undefined,
+      textContent: textContent || undefined,
       isScanned: true,
       isDemo: false,
       sourceUrl: sourceUrl || '',

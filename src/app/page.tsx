@@ -78,6 +78,7 @@ interface DocInfo {
   textContent?: string
   pageImages?: string[]
   isScanned?: boolean
+  pageTexts?: string[]
 }
 
 interface HistoryItem {
@@ -505,6 +506,7 @@ export default function Home() {
           textContent: docInfo.textContent,
           pageImages: docInfo.pageImages,
           isScanned: docInfo.isScanned,
+          pageTexts: docInfo.pageTexts,
           pageRange: pageRange.trim() || undefined,
         }),
         signal: controller.signal,
