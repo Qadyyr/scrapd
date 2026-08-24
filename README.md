@@ -1,37 +1,37 @@
-# 📥 Scribd Downloader
+# Scribd Downloader
 
-> Download any Scribd document as a **searchable, editable PDF** — free, no signup, no browser extensions.
+> Download any Scribd document as a searchable, editable PDF — free, no signup, no browser extensions.
 
 A clean, fast, and privacy-first tool to preview and download publicly accessible Scribd documents as PDFs or page images. Built with Next.js 16, TypeScript, and pdf-lib.
 
-![Scribd Downloader](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-38bdf8) ![License](https://img.shields.io/badge/License-MIT-green)
+![Next.js 16](https://img.shields.io/badge/Next.js-16-black) ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue) ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-38bdf8) ![License](https://img.shields.io/badge/License-MIT-green) ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
 
 ---
 
-## ✨ Features
+## Features
 
-### 📄 Download Any Document Type
+### Download Any Document Type
 
 | Document Type | How It Works | Output Quality |
 |---|---|---|
-| **Scanned PDFs** (CamScanner, photos) | Downloads full-page images from Scribd's CDN | ✅ Faithful to original — looks identical |
-| **Text-based PDFs** (typed exams, articles) | Extracts positioned text + diagrams from JSONP | ✅ Editable, selectable, searchable text |
-| **Mixed PDFs** (text + diagrams) | Text overlaid on faded diagram images | ✅ Text is primary, diagrams visible at 25% opacity |
+| **Scanned PDFs** (CamScanner, photos) | Downloads full-page images from Scribd's CDN | Faithful to original — looks identical |
+| **Text-based PDFs** (typed exams, articles) | Extracts positioned text + diagrams from JSONP | Editable, selectable, searchable text |
+| **Mixed PDFs** (text + diagrams) | Text overlaid on faded diagram images | Text is primary, diagrams visible at 25% opacity |
 
-### 🚀 Key Capabilities
+### Key Capabilities
 
-- **📄 Editable PDFs** — text-based documents produce PDFs where you can select, copy, and search text
-- **🖼️ Image-based PDFs** — scanned documents are downloaded as high-res page images
-- **🎨 Positioned text rendering** — preserves the original document layout using exact pixel coordinates
-- **📊 Diagram preservation** — tables, graphs, and figures embedded at their correct positions
-- **📦 ZIP download** — get all page images as individual files
-- **📝 TXT download** — extract plain text from text-based documents
-- **⭐ Favorites & search** — star important docs, search your download history
-- **⌨️ Keyboard shortcuts** — Ctrl+K to focus, Ctrl+Enter to fetch, Esc to close
-- **🌙 Dark/light mode** — beautiful in both themes
-- **📱 Mobile support** — works on iOS, Android, and desktop
+- **Editable PDFs** — text-based documents produce PDFs where you can select, copy, and search text
+- **Image-based PDFs** — scanned documents are downloaded as high-res page images
+- **Positioned text rendering** — preserves the original document layout using exact pixel coordinates
+- **Diagram preservation** — tables, graphs, and figures embedded at their correct positions
+- **ZIP download** — get all page images as individual files
+- **TXT download** — extract plain text from text-based documents
+- **Favorites & search** — star important docs, search your download history
+- **Keyboard shortcuts** — Ctrl+K to focus, Ctrl+Enter to fetch, Esc to close
+- **Dark/light mode** — beautiful in both themes
+- **Mobile support** — works on iOS, Android, and desktop
 
-### 🔒 Privacy First
+### Privacy First
 
 - No data stored on servers permanently
 - Documents are processed on demand
@@ -40,21 +40,26 @@ A clean, fast, and privacy-first tool to preview and download publicly accessibl
 
 ---
 
-## 🛠️ How It Works
+## How It Works
 
 ### Architecture
 
 ```
 User's Browser (passes Cloudflare)
-    ↓
+    |
+    v
 Bookmarklet extracts page HTML
-    ↓
-Server parses HTML → finds JSONP URLs
-    ↓
+    |
+    v
+Server parses HTML -> finds JSONP URLs
+    |
+    v
 Downloads page images + text from Scribd CDN
-    ↓
+    |
+    v
 Generates PDF with pdf-lib (text + diagrams)
-    ↓
+    |
+    v
 User downloads the PDF
 ```
 
@@ -72,13 +77,13 @@ Scribd splits text documents into two layers:
 
 Our server:
 1. Parses the JSONP to extract text spans with their parent div's font-size
-2. Auto-detects the coordinate scale factor (text coordinates are ~4.4× larger than page dimensions)
+2. Auto-detects the coordinate scale factor (text coordinates are ~4.4x larger than page dimensions)
 3. Draws diagram images at their exact positions (25% opacity)
 4. Draws text on top at scaled positions (selectable, editable)
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -112,7 +117,7 @@ Visit `http://localhost:3000` in your browser.
 
 ---
 
-## 📖 How to Use
+## How to Use
 
 ### Desktop
 
@@ -124,14 +129,14 @@ Visit `http://localhost:3000` in your browser.
 ### Mobile (iOS/Android)
 
 1. **Copy** the bookmarklet code from the homepage
-2. **Bookmark** any page, then **edit** the bookmark's URL → paste the code
+2. **Bookmark** any page, then **edit** the bookmark's URL and paste the code
 3. Name it **"extract"**
-4. On a Scribd page → **tap the address bar** → type **"extract"** → tap the suggestion
+4. On a Scribd page, tap the **address bar**, type **"extract"**, tap the suggestion
 5. A new tab opens with the download ready
 
 ---
 
-## 🧰 Tech Stack
+## Tech Stack
 
 | Technology | Purpose |
 |---|---|
@@ -148,52 +153,52 @@ Visit `http://localhost:3000` in your browser.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
-├── src/
-│   ├── app/
-│   │   ├── page.tsx              # Main UI (hero, document card, history)
-│   │   ├── layout.tsx            # Root layout with theme provider
-│   │   └── api/scribd/
-│   │       ├── info/route.ts     # Fetch document info (z-ai / Cloudflare Worker)
-│   │       ├── extract-full/     # Bookmarklet endpoint (receives HTML, returns extract ID)
-│   │       ├── download/         # Generate PDF (image + text + diagrams)
-│   │       ├── download-zip/     # Generate ZIP archive
-│   │       ├── download-txt/     # Generate plain text file
-│   │       ├── history/          # Download history CRUD
-│   │       └── stats/             # Usage statistics
-│   ├── lib/
-│   │   ├── scribd.ts             # Scribd URL parsing, HTML fetching, text extraction
-│   │   └── db.ts                 # Prisma client
-│   └── components/
-│       ├── theme-provider.tsx     # Dark/light mode
-│       └── animated-counter.tsx  # Stats animation
-├── prisma/
-│   └── schema.prisma              # DownloadHistory model
-├── public/
-│   └── mobile-setup.html          # Mobile setup guide
-└── cloudflare-worker/
-    ├── worker.js                  # Optional Cloudflare Worker proxy
-    └── README.md                 # Worker setup guide
+src/
+  app/
+    page.tsx              # Main UI (hero, document card, history)
+    layout.tsx            # Root layout with theme provider
+    api/scribd/
+      info/route.ts       # Fetch document info
+      extract-full/       # Bookmarklet endpoint
+      download/           # Generate PDF (image + text + diagrams)
+      download-zip/       # Generate ZIP archive
+      download-txt/       # Generate plain text file
+      history/            # Download history CRUD
+      stats/              # Usage statistics
+  lib/
+    scribd.ts             # URL parsing, HTML fetching, text extraction
+    db.ts                 # Prisma client
+  components/
+    theme-provider.tsx    # Dark/light mode
+    animated-counter.tsx  # Stats animation
+prisma/
+  schema.prisma           # DownloadHistory model
+public/
+  mobile-setup.html      # Mobile setup guide
+cloudflare-worker/
+  worker.js              # Optional Cloudflare Worker proxy
+  README.md              # Worker setup guide
 ```
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 ### Environment Variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | ✅ | SQLite database path (default: `file:./db/custom.db`) |
-| `CF_WORKER_URL` | ❌ | Cloudflare Worker URL (for Vercel deployments) |
-| `ZAI_BASE_URL` | ❌ | z-ai SDK base URL (sandbox only) |
-| `ZAI_API_KEY` | ❌ | z-ai SDK API key (sandbox only) |
+| `DATABASE_URL` | Yes | SQLite database path (default: `file:./db/custom.db`) |
+| `CF_WORKER_URL` | No | Cloudflare Worker URL (for Vercel deployments) |
+| `ZAI_BASE_URL` | No | z-ai SDK base URL (sandbox only) |
+| `ZAI_API_KEY` | No | z-ai SDK API key (sandbox only) |
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
@@ -205,7 +210,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ---
 
-## ⚠️ Legal Notice
+## Legal Notice
 
 This tool is intended for downloading **publicly accessible documents** that you have the right to download. Please respect Scribd's Terms of Service and all applicable copyright laws. Do not download or distribute copyrighted material without permission from the rights holder.
 
@@ -213,7 +218,7 @@ This project is not affiliated with Scribd, Inc. All trademarks belong to their 
 
 ---
 
-## 📊 Limitations
+## Limitations
 
 - **Cloudflare protection**: Scribd blocks all server-side access. The bookmarklet is required to bypass this from the user's browser.
 - **403 pages**: Some pages may return 403 on the image URL. These are rendered as text-only pages.
@@ -222,13 +227,13 @@ This project is not affiliated with Scribd, Inc. All trademarks belong to their 
 
 ---
 
-## 📝 License
+## License
 
 MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [pdf-lib](https://github.com/Hopding/pdf-lib) — PDF generation library
 - [cheerio](https://github.com/cheeriojs/cheerio) — HTML parsing
@@ -240,8 +245,8 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-**[⬆ Back to top](#-scribd-downloader)**
+[Back to top](#scribd-downloader)
 
-Made with ❤️ using Next.js, TypeScript, and Tailwind CSS
+Made with Next.js, TypeScript, and Tailwind CSS
 
 </div>
