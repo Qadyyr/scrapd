@@ -130,31 +130,42 @@ export async function POST(req: NextRequest) {
           const plainText = texts.join(' ')
 
           // Extract positioned spans with ALL style attributes
-          const posSpans = clean.match(/<span class=a style="([^"]*)">([^<]*)<\/span>/g) || []
+          // Font-size is in the PARENT <div class="ffNN" style="font-size:Xpx">, not in the span
+          // So we parse div+span combinations to get the real font size
+          const divSpanRegex = /<div class="(ff\d+)" style="([^"]*)">([\s\S]*?)<\/div>/g
           const positions: Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }> = []
-          for (const spanHtml of posSpans) {
-            const styleMatch = spanHtml.match(/style="([^"]*)"/)
-            const textMatch = spanHtml.match(/>([^<]*)</)
-            if (!styleMatch || !textMatch) continue
-            const style = styleMatch[1]
-            const text = textMatch[1].replace(/\xa0/g, ' ').trim()
-            if (!text) continue
-            const leftMatch = style.match(/left:\s*(-?\d+(?:\.\d+)?)px/)
-            const topMatch = style.match(/top:\s*(-?\d+(?:\.\d+)?)px/)
-            const fsMatch = style.match(/font-size:\s*(\d+)px/)
-            const colorMatch = style.match(/color:\s*(#[0-9a-fA-F]{3,6})/)
-            const wsMatch = style.match(/word-spacing:\s*(-?\d+)px/)
-            const lsMatch = style.match(/letter-spacing:\s*(-?\d+)px/)
-            if (leftMatch && topMatch) {
-              positions.push({
-                text,
-                left: parseFloat(leftMatch[1]),
-                top: parseFloat(topMatch[1]),
-                fontSize: fsMatch ? parseInt(fsMatch[1]) : 20,
-                color: colorMatch ? colorMatch[1] : '#000000',
-                wordSpacing: wsMatch ? parseInt(wsMatch[1]) : 0,
-                letterSpacing: lsMatch ? parseInt(lsMatch[1]) : 0,
-              })
+          let divMatch
+          while ((divMatch = divSpanRegex.exec(clean)) !== null) {
+            const divStyle = divMatch[2]
+            const divContent = divMatch[3]
+            const divFsMatch = divStyle.match(/font-size:\s*(\d+)px/)
+
+            // Find spans within this div
+            const innerSpans = divContent.match(/<span class=a style="([^"]*)">([^<]*)<\/span>/g) || []
+            for (const spanHtml of innerSpans) {
+              const styleMatch = spanHtml.match(/style="([^"]*)"/)
+              const textMatch = spanHtml.match(/>([^<]*)</)
+              if (!styleMatch || !textMatch) continue
+              const style = styleMatch[1]
+              const text = textMatch[1].replace(/\xa0/g, ' ').trim()
+              if (!text) continue
+              const leftMatch = style.match(/left:\s*(-?\d+(?:\.\d+)?)px/)
+              const topMatch = style.match(/top:\s*(-?\d+(?:\.\d+)?)px/)
+              const colorMatch = style.match(/color:\s*(#[0-9a-fA-F]{3,6})/)
+              const wsMatch = style.match(/word-spacing:\s*(-?\d+)px/)
+              const lsMatch = style.match(/letter-spacing:\s*(-?\d+)px/)
+              if (leftMatch && topMatch) {
+                positions.push({
+                  text,
+                  left: parseFloat(leftMatch[1]),
+                  top: parseFloat(topMatch[1]),
+                  // Use parent div's font-size (the ACTUAL font size, not 0)
+                  fontSize: divFsMatch ? parseInt(divFsMatch[1]) : 73,
+                  color: colorMatch ? colorMatch[1] : '#000000',
+                  wordSpacing: wsMatch ? parseInt(wsMatch[1]) : 0,
+                  letterSpacing: lsMatch ? parseInt(lsMatch[1]) : 0,
+                })
+              }
             }
           }
 
