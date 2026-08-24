@@ -401,7 +401,8 @@ async function generateImagePdf(
   meta?: { title?: string; author?: string | null },
   onProgress?: (done: number, total: number) => void,
   pageTexts?: string[],
-  pageSpans?: Array<PositionedSpan[]>
+  pageSpans?: Array<PositionedSpan[]>,
+  pageDiagrams?: Array<Array<{ url: string; left: number; top: number; width: number; height: number }>>
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create()
   if (meta?.title) pdfDoc.setTitle(sanitizeForWinAnsi(meta.title))
@@ -437,12 +438,11 @@ async function generateImagePdf(
       const result = results[j]
       const pageIndex = i + j
       const spans = pageSpans?.[pageIndex]
+      const diagrams = pageDiagrams?.[pageIndex]
 
-      // For text-based documents: if we have positioned spans, create a
-      // pure text page (editable, selectable, searchable) — no image background.
-      // For scanned documents (no spans): use the image as the full page.
+      // If we have positioned text spans → create an editable text page
+      // with diagrams embedded at their exact positions
       if (spans && spans.length > 3) {
-        // TEXT PAGE — editable PDF with positioned text (no image)
         const pageW = 902
         const pageH = 1274
         const pdfPage = pdfDoc.addPage([pageW, pageH])
@@ -453,34 +453,45 @@ async function generateImagePdf(
           color: rgb(1, 1, 1),
         })
 
-        // Draw only the positioned text (selectable, searchable, editable)
+        // Draw diagram/table images at their EXACT positions (from JSONP <img> tags)
+        if (diagrams && diagrams.length > 0) {
+          for (const diag of diagrams) {
+            try {
+              const diagBuffer = await fetchImageBuffer(diag.url)
+              const diagBytes = new Uint8Array(diagBuffer)
+              const isPng = diagBytes[0] === 0x89 && diagBytes[1] === 0x50
+              const isJpeg = diagBytes[0] === 0xff && diagBytes[1] === 0xd8
+              let diagImg
+              if (isPng) diagImg = await pdfDoc.embedPng(diagBytes)
+              else if (isJpeg) diagImg = await pdfDoc.embedJpg(diagBytes)
+              else { try { diagImg = await pdfDoc.embedJpg(diagBytes) } catch { continue } }
+
+              if (diagImg) {
+                // Draw at exact position (top-down → bottom-up)
+                pdfPage.drawImage(diagImg, {
+                  x: diag.left,
+                  y: pageH - diag.top - diag.height,
+                  width: diag.width > 0 ? diag.width : diagImg.width,
+                  height: diag.height > 0 ? diag.height : diagImg.height,
+                })
+              }
+            } catch {
+              // skip failed diagram
+            }
+          }
+        }
+
+        // Draw text ON TOP of diagrams (selectable, editable)
         drawSpansOverlay(pdfPage, pageW, pageH, spans, font, boldFont)
 
-        // If image is also available, draw it as a light background layer
-        // (diagrams/tables visible but text is primary and editable)
-        if (result.status === 'fulfilled' && result.value) {
-          const img = result.value
-          // Draw image at its natural position (top-left of page)
-          // with reduced opacity so text is clearly readable on top
-          pdfPage.drawImage(img, {
-            x: 0,
-            y: pageH - img.height,
-            width: img.width,
-            height: img.height,
-            opacity: 0.3, // Light background — text is primary
-          })
-          // Re-draw text on top of the faded image
-          drawSpansOverlay(pdfPage, pageW, pageH, spans, font, boldFont)
-        }
       } else if (result.status === 'fulfilled' && result.value) {
-        // IMAGE PAGE — scanned document, no text (image is the full page)
+        // No text spans → scanned document → full page image
         const img = result.value
         const pdfPage = pdfDoc.addPage([img.width, img.height])
-        pdfPage.drawImage(img, {
-          x: 0, y: 0, width: img.width, height: img.height,
-        })
+        pdfPage.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height })
+
       } else {
-        // Image failed (403) and no positioned spans — text fallback
+        // Image failed (403) and no spans → text fallback
         const pageText = pageTexts?.[pageIndex]
         if (pageText && pageText.trim().length > 10) {
           addCleanTextPage(pdfDoc, font, boldFont, pageIndex + 1, pageText)
@@ -678,6 +689,7 @@ export async function POST(req: NextRequest) {
       isScanned,
       pageTexts,
       pageSpans,
+      pageDiagrams,
     }: {
       docId: string
       title: string
@@ -691,6 +703,7 @@ export async function POST(req: NextRequest) {
       isScanned?: boolean
       pageTexts?: string[]
       pageSpans?: Array<Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }>>
+      pageDiagrams?: Array<Array<{ url: string; left: number; top: number; width: number; height: number }>>
     } = body
 
     let pdfBytes: Uint8Array
@@ -712,7 +725,8 @@ export async function POST(req: NextRequest) {
         },
         undefined,
         pageTexts,
-        pageSpans
+        pageSpans,
+        pageDiagrams
       )
       actualPageCount = imagePages.length
       isTextPdf = false

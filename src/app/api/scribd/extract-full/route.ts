@@ -100,18 +100,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Transform JSONP URLs → image URLs
-    const pageImages = urls.map((jsonpUrl) => {
+    const imgUrlArray = urls.map((jsonpUrl) => {
       return jsonpUrl
         .replace('/pages/', '/images/')
         .replace(/\.jsonp$/, '.jpg')
         .replace('html.scribdassets.com', 'html.scribd.com')
     })
 
-    // Fetch text content AND positioned spans from JSONP files
-    // Each span has: left, top, fontSize, color, wordSpacing, letterSpacing
-    // We preserve ALL styling for faithful rendering
+    // Fetch text content, positioned spans, AND embedded diagram images from JSONP
     const pageTexts: string[] = []
     const pageSpans: Array<Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }>> = []
+    const pageDiagrams: Array<Array<{ url: string; left: number; top: number; width: number; height: number }>> = []
     try {
       const textResults = await Promise.allSettled(
         urls.slice(0, 50).map(async (jsonpUrl) => {
@@ -119,7 +118,7 @@ export async function POST(req: NextRequest) {
             headers: { Referer: 'https://www.scribd.com/' },
             signal: AbortSignal.timeout(8000),
           })
-          if (!res.ok) return { text: '', spans: [] as Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }> }
+          if (!res.ok) return { text: '', spans: [] as Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }>, images: [] as Array<{ url: string; left: number; top: number; width: number; height: number }> }
           const raw = await res.text()
           const clean = raw.replace(/\\"/g, '"')
 
@@ -162,16 +161,42 @@ export async function POST(req: NextRequest) {
           // Sort by (top, left) for reading order
           positions.sort((a, b) => a.top - b.top || a.left - b.left)
 
-          return { text: plainText, spans: positions }
+          // Extract embedded diagram/table images with positions
+          // <img class="absimg" style="left:Xpx;top:Ypx;width:Wpx;height:Hpx" orig="URL" />
+          const embeddedImages: Array<{ url: string; left: number; top: number; width: number; height: number }> = []
+          const imgMatches = clean.match(/<img[^>]*class=["']absimg["'][^>]*>/g) || []
+          for (const imgHtml of imgMatches) {
+            const origMatch = imgHtml.match(/orig="([^"]*)"/)
+            const styleMatch = imgHtml.match(/style="([^"]*)"/)
+            if (!origMatch) continue
+            const imgUrl = origMatch[1].replace(/^http:/, 'https:')
+            let left = 0, top = 0, width = 0, height = 0
+            if (styleMatch) {
+              const style = styleMatch[1]
+              const lm = style.match(/left:\s*(-?\d+(?:\.\d+)?)px/)
+              const tm = style.match(/top:\s*(-?\d+(?:\.\d+)?)px/)
+              const wm = style.match(/width:\s*(-?\d+(?:\.\d+)?)px/)
+              const hm = style.match(/height:\s*(-?\d+(?:\.\d+)?)px/)
+              if (lm) left = parseFloat(lm[1])
+              if (tm) top = parseFloat(tm[1])
+              if (wm) width = parseFloat(wm[1])
+              if (hm) height = parseFloat(hm[1])
+            }
+            embeddedImages.push({ url: imgUrl, left, top, width, height })
+          }
+
+          return { text: plainText, spans: positions, images: embeddedImages }
         })
       )
       for (const result of textResults) {
         if (result.status === 'fulfilled') {
           pageTexts.push(result.value.text || '')
           pageSpans.push(result.value.spans || [])
+          pageDiagrams.push(result.value.images || [])
         } else {
           pageTexts.push('')
           pageSpans.push([])
+          pageDiagrams.push([])
         }
       }
     } catch {
@@ -197,12 +222,13 @@ export async function POST(req: NextRequest) {
       title: cleanTitle,
       author: null,
       description: descMatch?.[1] || null,
-      pageCount: pcMatch ? parseInt(pcMatch[1]) : pageImages.length,
-      thumbnail: thumbMatch?.[1] || pageImages[0] || null,
-      pages: pageImages.map((url, i) => ({ index: i, url })),
-      pageImages,
+      pageCount: pcMatch ? parseInt(pcMatch[1]) : imgUrlArray.length,
+      thumbnail: thumbMatch?.[1] || imgUrlArray[0] || null,
+      pages: imgUrlArray.map((url, i) => ({ index: i, url })),
+      pageImages: imgUrlArray,
       pageTexts: pageTexts.length > 0 ? pageTexts : undefined,
       pageSpans: pageSpans.length > 0 ? pageSpans : undefined,
+      pageDiagrams: pageDiagrams.length > 0 ? pageDiagrams : undefined,
       textContent: textContent || undefined,
       isScanned: true,
       isDemo: false,
@@ -216,7 +242,7 @@ export async function POST(req: NextRequest) {
 
     // Return the ID — the bookmarklet will redirect to /?extract_id=ID
     return NextResponse.json(
-      { success: true, extractId, pageCount: pageImages.length, title: cleanTitle },
+      { success: true, extractId, pageCount: imgUrlArray.length, title: cleanTitle },
       { headers: CORS_HEADERS }
     )
   } catch (err) {

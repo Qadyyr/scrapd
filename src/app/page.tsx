@@ -80,6 +80,7 @@ interface DocInfo {
   isScanned?: boolean
   pageTexts?: string[]
   pageSpans?: Array<Array<{ text: string; left: number; top: number; fontSize: number; color: string; wordSpacing: number; letterSpacing: number }>>
+  pageDiagrams?: Array<Array<{ url: string; left: number; top: number; width: number; height: number }>>
 }
 
 interface HistoryItem {
@@ -509,6 +510,7 @@ export default function Home() {
           isScanned: docInfo.isScanned,
           pageTexts: docInfo.pageTexts,
           pageSpans: docInfo.pageSpans,
+          pageDiagrams: docInfo.pageDiagrams,
           pageRange: pageRange.trim() || undefined,
         }),
         signal: controller.signal,
