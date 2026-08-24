@@ -507,7 +507,12 @@ async function generateImagePdf(
 
 /**
  * Draw positioned text spans on a page.
- * Page is always 902x1274px (Scribd standard). Text coordinates are 1:1.
+ * Scribd text coordinates are in a LARGER space than the page dimensions.
+ * We auto-detect the scale factor by comparing max text coordinates to
+ * the page size.
+ *
+ * Image positions (from <img class="absimg">) are already in page space — no scaling.
+ * Text positions need scaling.
  */
 function drawSpansOverlay(
   page: PDFPage,
@@ -517,15 +522,30 @@ function drawSpansOverlay(
   font: PDFFont,
   boldFont: PDFFont
 ) {
+  // Auto-detect scale: if text coordinates exceed page dimensions,
+  // calculate the scale factor
+  let maxLeft = 0
+  let maxTop = 0
+  for (const span of spans) {
+    if (span.left > maxLeft) maxLeft = span.left
+    if (span.top > maxTop) maxTop = span.top
+  }
+
+  // If coordinates fit within page, no scaling needed (scanned docs)
+  // If they exceed page, calculate scale (text-based docs)
+  const scaleX = maxLeft > pageWidth ? pageWidth / (maxLeft + 50) : 1
+  const scaleY = maxTop > pageHeight ? pageHeight / (maxTop + 50) : 1
+
   for (const span of spans) {
     const safeText = sanitizeForWinAnsi(span.text)
     if (!safeText || safeText.trim().length === 0) continue
 
-    // 1:1 coordinates — no scaling (page is 902x1274, spans are in same coordinate space)
-    const x = span.left
+    // Scale text positions to match page dimensions
+    const x = span.left * scaleX
     // Convert top-down (Scribd) to bottom-up (pdf-lib)
-    const y = pageHeight - span.top - span.fontSize
-    const fontSize = Math.max(6, span.fontSize)
+    const y = pageHeight - (span.top * scaleY) - (span.fontSize * scaleY)
+    // Scale font size too (Scribd uses large font sizes like 73px)
+    const fontSize = Math.max(6, span.fontSize * Math.min(scaleX, scaleY))
 
     // Parse color (#RRGGBB → rgb values)
     const color = hexToRgb(span.color)

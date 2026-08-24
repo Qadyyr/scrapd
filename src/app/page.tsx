@@ -1109,10 +1109,21 @@ export default function Home() {
                             <FileText className="h-3 w-3" />
                             {docInfo.pageCount} pages
                           </Badge>
-                          {docInfo.isScanned && (
+                          {docInfo.pageSpans && docInfo.pageSpans.length > 0 ? (
+                            <Badge className="gap-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/15">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Text-based (editable PDF)
+                            </Badge>
+                          ) : docInfo.isScanned ? (
                             <Badge className="gap-1 bg-violet-500/10 text-violet-600 dark:text-violet-400 hover:bg-violet-500/15">
                               <ImageIcon className="h-3 w-3" />
                               Scanned (image-based)
+                            </Badge>
+                          ) : null}
+                          {docInfo.pageDiagrams && docInfo.pageDiagrams.some(d => d.length > 0) && (
+                            <Badge className="gap-1 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/15">
+                              <ImageIcon className="h-3 w-3" />
+                              Contains diagrams
                             </Badge>
                           )}
                           {docInfo.author && (
