@@ -438,11 +438,11 @@ async function generateImagePdf(
       const pageIndex = i + j
       const spans = pageSpans?.[pageIndex]
 
-      if (result.status === 'fulfilled' && result.value) {
-        const img = result.value
-        // ALWAYS use Scribd's standard page dimensions (902x1274)
-        // The downloaded image may be smaller (just a diagram fragment)
-        // so we draw it at the top-left of the full page
+      // For text-based documents: if we have positioned spans, create a
+      // pure text page (editable, selectable, searchable) — no image background.
+      // For scanned documents (no spans): use the image as the full page.
+      if (spans && spans.length > 3) {
+        // TEXT PAGE — editable PDF with positioned text (no image)
         const pageW = 902
         const pageH = 1274
         const pdfPage = pdfDoc.addPage([pageW, pageH])
@@ -453,19 +453,34 @@ async function generateImagePdf(
           color: rgb(1, 1, 1),
         })
 
-        // Draw the image (diagram/table fragment) at top-left corner
-        pdfPage.drawImage(img, {
-          x: 0, y: pageH - img.height,
-          width: img.width,
-          height: img.height,
-        })
+        // Draw only the positioned text (selectable, searchable, editable)
+        drawSpansOverlay(pdfPage, pageW, pageH, spans, font, boldFont)
 
-        // Overlay positioned text spans (no scaling needed — 1:1 with page)
-        if (spans && spans.length > 0) {
+        // If image is also available, draw it as a light background layer
+        // (diagrams/tables visible but text is primary and editable)
+        if (result.status === 'fulfilled' && result.value) {
+          const img = result.value
+          // Draw image at its natural position (top-left of page)
+          // with reduced opacity so text is clearly readable on top
+          pdfPage.drawImage(img, {
+            x: 0,
+            y: pageH - img.height,
+            width: img.width,
+            height: img.height,
+            opacity: 0.3, // Light background — text is primary
+          })
+          // Re-draw text on top of the faded image
           drawSpansOverlay(pdfPage, pageW, pageH, spans, font, boldFont)
         }
+      } else if (result.status === 'fulfilled' && result.value) {
+        // IMAGE PAGE — scanned document, no text (image is the full page)
+        const img = result.value
+        const pdfPage = pdfDoc.addPage([img.width, img.height])
+        pdfPage.drawImage(img, {
+          x: 0, y: 0, width: img.width, height: img.height,
+        })
       } else {
-        // Image failed (403) — text-only page
+        // Image failed (403) and no positioned spans — text fallback
         const pageText = pageTexts?.[pageIndex]
         if (pageText && pageText.trim().length > 10) {
           addCleanTextPage(pdfDoc, font, boldFont, pageIndex + 1, pageText)
