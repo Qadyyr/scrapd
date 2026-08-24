@@ -454,6 +454,7 @@ async function generateImagePdf(
         })
 
         // Draw diagram/table images at their EXACT positions (from JSONP <img> tags)
+        // Draw at REDUCED OPACITY so text is clearly primary and readable
         if (diagrams && diagrams.length > 0) {
           for (const diag of diagrams) {
             try {
@@ -467,12 +468,13 @@ async function generateImagePdf(
               else { try { diagImg = await pdfDoc.embedJpg(diagBytes) } catch { continue } }
 
               if (diagImg) {
-                // Draw at exact position (top-down → bottom-up)
+                // Draw at exact position with reduced opacity (light background)
                 pdfPage.drawImage(diagImg, {
                   x: diag.left,
-                  y: pageH - diag.top - diag.height,
+                  y: pageH - diag.top - (diag.height > 0 ? diag.height : diagImg.height),
                   width: diag.width > 0 ? diag.width : diagImg.width,
                   height: diag.height > 0 ? diag.height : diagImg.height,
+                  opacity: 0.25, // Light background — text is clearly readable on top
                 })
               }
             } catch {
